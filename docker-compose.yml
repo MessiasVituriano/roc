@@ -1,0 +1,44 @@
+services:
+    app:
+        build:
+            context: .
+            target: php
+        restart: unless-stopped
+        env_file: .env
+        environment:
+            DB_HOST: pgsql
+            DB_PORT: 5432
+        depends_on:
+            pgsql:
+                condition: service_healthy
+        volumes:
+            - storage:/var/www/html/storage
+
+    nginx:
+        build:
+            context: .
+            target: web
+        restart: unless-stopped
+        ports:
+            - '${APP_PORT:-80}:80'
+        depends_on:
+            - app
+
+    pgsql:
+        image: postgres:18-alpine
+        restart: unless-stopped
+        environment:
+            POSTGRES_DB: ${DB_DATABASE:-roc}
+            POSTGRES_USER: ${DB_USERNAME:-roc}
+            POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+        volumes:
+            - pgdata:/var/lib/postgresql/data
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME:-roc}']
+            interval: 5s
+            timeout: 3s
+            retries: 10
+
+volumes:
+    pgdata:
+    storage:
