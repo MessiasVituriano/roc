@@ -11,9 +11,21 @@ use Illuminate\Database\Seeder;
  *
  * A régua de pontos é fixa em toda a dinâmica: +150 (melhor decisão para o
  * hotel), +80, 0 e -50. Trocar o conteúdo do evento é editar este arquivo.
+ *
+ * `rounds()` descreve **só a Fase 1**. A Fase 2 são as mesmas cinco perguntas,
+ * agora decididas em consenso pela mesa — e por isso são espelhadas em código
+ * (`mirrorPhaseTwo`), não copiadas aqui. Assim editar um cenário muda as duas
+ * fases de uma vez, e a comparação Fase 1 → Fase 2 continua sendo maçã com maçã.
  */
 class LiveConsensusSeeder extends Seeder
 {
+    /**
+     * Tempo de votação de cada rodada da Fase 2. Bem maior que os 20s da Fase 1
+     * porque a mesa precisa discutir antes de registrar. O facilitador ainda
+     * sobrescreve rodada a rodada pelo painel.
+     */
+    public const CONSENSUS_DURATION = 90;
+
     protected array $missions = [
         ['diaria_media', 'Diária Média', 'Seu diretor financeiro pediu que você preservasse a diária média.', '💰', '#c9922e'],
         ['participacao', 'Participação de Mercado', 'O hotel precisa recuperar participação de mercado.', '💼', '#3b82f6'],
@@ -47,7 +59,7 @@ class LiveConsensusSeeder extends Seeder
     public function run(): void
     {
         $event = Event::create([
-            'title' => 'Sala de Decisão ROC',
+            'title' => 'Sala de Decisões ROC',
             'status' => Event::STATUS_DRAFT,
             'phase' => 1,
             'current_round' => 1,
@@ -94,9 +106,54 @@ class LiveConsensusSeeder extends Seeder
             }
         }
 
+        $this->mirrorPhaseTwo($event);
+
         $event->update([
             'current_question_id' => $event->questions()->where('phase', 1)->where('round', 1)->value('id'),
         ]);
+    }
+
+    /**
+     * Fase 2 = as mesmas perguntas da Fase 1, agora em consenso da mesa.
+     *
+     * Repetir a pergunta é o ponto da dinâmica: com o mesmo cenário e a mesma
+     * régua, a diferença de pontos entre as fases isola exatamente uma variável
+     * — decidir sozinho contra decidir junto. É isso que a coluna "evolução" do
+     * placar por mesa passa a medir.
+     */
+    protected function mirrorPhaseTwo(Event $event): void
+    {
+        $phaseOne = $event->questions()
+            ->with('options')
+            ->where('phase', 1)
+            ->where('is_bonus', false)
+            ->orderBy('round')
+            ->get();
+
+        foreach ($phaseOne as $question) {
+            $mirrored = $event->questions()->create([
+                'phase' => 2,
+                'round' => $question->round,
+                'mode' => Question::MODE_CONSENSUS,
+                'label' => $question->label,
+                'title' => $question->title,
+                'context' => $question->context,
+                // nota de condução: na Fase 2 o viés a observar não é mais o da
+                // missão, é o de quem cede primeiro na mesa
+                'bias_note' => trim(
+                    "Mesma pergunta da rodada {$question->round} da Fase 1 — compare a decisão da mesa "
+                    .'com o que essas pessoas votaram sozinhas. '.($question->bias_note ?? '')
+                ),
+                'duration' => self::CONSENSUS_DURATION,
+                'is_bonus' => false,
+            ]);
+
+            foreach ($question->options as $option) {
+                $mirrored->options()->create($option->only([
+                    'text', 'effect', 'points', 'color', 'order',
+                ]));
+            }
+        }
     }
 
     /** Verde para a melhor decisão, vermelho para a que destrói valor. */
@@ -180,25 +237,15 @@ class LiveConsensusSeeder extends Seeder
             ],
 
             // ---------------------------------------------------------------
-            // Fase 2 e desempate: a apresentação não define o cenário destas
-            // duas rodadas. A mecânica está pronta — basta substituir os
-            // textos abaixo pelo conteúdo final.
+            // As cinco rodadas da Fase 2 não aparecem aqui: são espelhadas da
+            // Fase 1 por `mirrorPhaseTwo()`, com `mode = consensus`.
+            //
+            // O desempate fica na rodada 6 da Fase 2 — depois das cinco reais,
+            // e fora da contagem (`is_bonus`), então "próxima rodada" nunca cai
+            // nele. Só o botão de desempate do painel o carrega.
             // ---------------------------------------------------------------
             [
-                'phase' => 2, 'round' => 1, 'mode' => Question::MODE_CONSENSUS, 'duration' => 180,
-                'label' => 'DECISÃO DA MESA',
-                'title' => '[PREENCHER] Cenário da rodada final, decidida em consenso pela mesa',
-                'context' => '[PREENCHER com o cenário integrado da Fase 2. Nesta rodada todas as missões se fundem em uma só: maximizar o resultado total do hotel.]',
-                'bias' => 'Sem viés de missão: a missão agora é única para toda a sala.',
-                'options' => [
-                    ['[PREENCHER] Alternativa A', '[PREENCHER] Efeito da decisão A.', -50],
-                    ['[PREENCHER] Alternativa B', '[PREENCHER] Efeito da decisão B.', 0],
-                    ['[PREENCHER] Alternativa C', '[PREENCHER] Efeito da decisão C.', 80],
-                    ['[PREENCHER] Alternativa D', '[PREENCHER] Efeito da decisão D.', 150],
-                ],
-            ],
-            [
-                'phase' => 2, 'round' => 2, 'mode' => Question::MODE_CONSENSUS, 'duration' => 60,
+                'phase' => 2, 'round' => 6, 'mode' => Question::MODE_CONSENSUS, 'duration' => 60,
                 'is_bonus' => true,
                 'label' => 'DESEMPATE',
                 'title' => '[PREENCHER] Pergunta bônus de desempate',

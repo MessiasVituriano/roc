@@ -12,8 +12,8 @@ use RuntimeException;
  * método aqui.
  *
  * Roteiro: Fase 1 com 5 rodadas individuais (~20s de voto + revelação a cada
- * rodada), virada de fase revelando o placar por grupo de missão, e Fase 2 com
- * uma rodada de consenso por mesa.
+ * rodada), virada de fase revelando o placar por grupo de missão, e Fase 2
+ * repetindo as mesmas 5 perguntas, agora decididas em consenso pela mesa.
  */
 class EventFlowService
 {
@@ -187,6 +187,32 @@ class EventFlowService
     public function hideMissions(Event $event): Event
     {
         $event->update(['missions_revealed' => false]);
+
+        return $event->refresh();
+    }
+
+    /**
+     * O fecho: abre o gabarito e o comparativo entre as fases.
+     *
+     * Passo separado do encerramento de propósito. Encerrar joga os celulares
+     * na tela de "obrigado"; este clique mantém todo mundo na sala enquanto o
+     * telão mostra qual era a melhor decisão de cada rodada e quanto a mesa
+     * rendeu a mais que as decisões isoladas.
+     */
+    public function revealAnswers(Event $event): Event
+    {
+        $event->update([
+            'answers_revealed' => true,
+            'round_status' => Event::ROUND_IDLE,
+            'round_ends_at' => null,
+        ]);
+
+        return $event->refresh();
+    }
+
+    public function hideAnswers(Event $event): Event
+    {
+        $event->update(['answers_revealed' => false]);
 
         return $event->refresh();
     }

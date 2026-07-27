@@ -7,6 +7,8 @@ import AuditoriumMap from '../components/AuditoriumMap.vue'
 import CountdownTimer from '../components/CountdownTimer.vue'
 import ProgressBar from '../components/ProgressBar.vue'
 import PixelAvatar from '../components/PixelAvatar.vue'
+import BrandLogo from '../components/BrandLogo.vue'
+import LoadingScreen from '../components/LoadingScreen.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,7 +30,7 @@ const editing = ref(false)
 const dirtyLayout = ref(new Map())
 const layer = ref('tables')
 
-const { data: state, online, refresh, start } = usePolling(
+const { data: state, error: stateError, online, refresh, start } = usePolling(
     () => api.get('/admin/overview'),
     { interval: 1000, immediate: false },
 )
@@ -42,6 +44,22 @@ const results = computed(() => state.value?.results ?? null)
 const tableRanking = computed(() => state.value?.table_ranking ?? [])
 const missionRanking = computed(() => state.value?.mission_ranking ?? [])
 const individualRanking = computed(() => state.value?.individual_ranking ?? [])
+
+// O servidor ordena pela decisão individual (é o que o telão premia). Aqui o
+// facilitador precisa das três leituras, então a reordenação é no cliente —
+// a lista já está toda no payload, não vale uma ida ao servidor por clique.
+const PERSON_SORTS = [
+    { key: 'points', label: 'Individual' },
+    { key: 'table_points', label: 'Mesa' },
+    { key: 'combined_points', label: 'Total' },
+]
+const personSort = ref('points')
+
+const peopleRanking = computed(() =>
+    [...individualRanking.value]
+        .sort((a, b) => b[personSort.value] - a[personSort.value])
+        .map((row, i) => ({ ...row, rank: i + 1 })),
+)
 const needsTieBreak = computed(() => state.value?.needs_tie_break ?? false)
 
 const individual = computed(() => event.value?.phase_mode === 'individual')
@@ -177,7 +195,10 @@ async function saveLayout() {
 <template>
     <div v-if="!authed" class="min-h-dvh grid place-items-center p-6">
         <div class="w-full max-w-sm rounded-3xl bg-slate-900/80 ring-1 ring-white/10 p-8 space-y-4">
-            <h1 class="text-2xl font-black text-white">Painel Master 🎛️</h1>
+            <div class="grid place-items-center pb-2">
+                <BrandLogo size="lg" stacked />
+            </div>
+            <h1 class="text-2xl font-black text-white text-center">Painel Master 🎛️</h1>
             <input
                 v-model="tokenInput"
                 type="password"
@@ -195,8 +216,16 @@ async function saveLayout() {
         </div>
     </div>
 
+    <!-- autenticado, mas o primeiro /admin/overview ainda não voltou -->
+    <LoadingScreen
+        v-else-if="!state"
+        :label="stateError ? 'Sem conexão com o servidor — reconectando…' : 'Abrindo o painel master…'"
+    />
+
     <div v-else class="min-h-dvh flex flex-col">
         <header class="px-6 py-3 flex flex-wrap items-center gap-4 bg-slate-950/80 ring-1 ring-white/5">
+            <BrandLogo size="xs" :tagline="false" />
+            <span class="w-px h-6 bg-white/10" />
             <h1 class="text-lg font-black text-white">🎛️ {{ event?.title ?? 'Painel Master' }}</h1>
             <span class="px-3 py-1 rounded-full text-xs font-bold text-white" :class="stageLabel[1]">
                 {{ stageLabel[0] }}
@@ -339,6 +368,25 @@ async function saveLayout() {
                     >
                         ➡ Ir para a Fase {{ (event?.phase ?? 1) + 1 }}
                     </button>
+                </div>
+
+                <!--
+                    O fecho. Separado de "Encerrar" de propósito: encerrar joga
+                    os celulares na tela de obrigado, este clique mantém a sala
+                    inteira olhando para o telão.
+                -->
+                <div class="rounded-3xl bg-emerald-500/10 ring-2 ring-emerald-500/40 p-5 space-y-2">
+                    <p class="text-[10px] uppercase tracking-widest text-emerald-300 font-black">O fecho</p>
+                    <button
+                        class="w-full rounded-2xl px-4 py-3 font-black text-white bg-gradient-to-r from-emerald-500 to-teal-500 hover:brightness-110 active:scale-95 transition"
+                        @click="action('answers', event?.answers_revealed ? '/admin/answers/hide' : '/admin/answers/reveal')"
+                    >
+                        {{ event?.answers_revealed ? '🙈 Ocultar gabarito' : '🔓 Revelar gabarito + comparativo' }}
+                    </button>
+                    <p class="text-[11px] text-emerald-200/60 leading-snug">
+                        Abre a melhor decisão de cada rodada e o comparativo Fase 1 × Fase 2.
+                        Antes disso o telão só mostra distribuição — a Fase 2 repete as perguntas.
+                    </p>
                 </div>
 
                 <div class="rounded-3xl bg-slate-900/70 ring-1 ring-white/10 p-5 space-y-2">
@@ -497,6 +545,8 @@ async function saveLayout() {
                         <thead class="text-[10px] uppercase tracking-widest text-slate-500">
                             <tr>
                                 <th class="text-left pb-2">Mesa</th>
+                                <th class="text-right pb-2" title="Acertos da mesa na Fase 1 (votos individuais dos membros)">✔ F1</th>
+                                <th class="text-right pb-2" title="Acertos da mesa na Fase 2 (decisões em consenso)">✔ F2</th>
                                 <th class="text-right pb-2">F1</th>
                                 <th class="text-right pb-2">F2</th>
                                 <th class="text-right pb-2">Total</th>
@@ -512,6 +562,21 @@ async function saveLayout() {
                                 <td class="py-1.5 text-white font-bold truncate">
                                     <span class="text-slate-500 tabular-nums mr-1">{{ row.position }}º</span>
                                     {{ row.icon }} {{ row.name }}
+                                </td>
+                                <td class="text-right tabular-nums text-slate-400">
+                                    {{ row.phase_one_correct }}/{{ row.phase_one_votes }}
+                                    <span v-if="row.phase_one_accuracy !== null" class="text-[10px] text-slate-500 ml-0.5">
+                                        {{ row.phase_one_accuracy }}%
+                                    </span>
+                                </td>
+                                <td
+                                    class="text-right tabular-nums"
+                                    :class="row.phase_two_accuracy > row.phase_one_accuracy ? 'text-emerald-400 font-bold' : 'text-slate-300'"
+                                >
+                                    {{ row.phase_two_correct }}/{{ row.phase_two_votes }}
+                                    <span v-if="row.phase_two_accuracy !== null" class="text-[10px] opacity-70 ml-0.5">
+                                        {{ row.phase_two_accuracy }}%
+                                    </span>
                                 </td>
                                 <td class="text-right tabular-nums text-slate-400">{{ row.phase_one_points }}</td>
                                 <td class="text-right tabular-nums text-slate-300">{{ row.phase_two_points }}</td>
@@ -544,25 +609,81 @@ async function saveLayout() {
                             <p class="text-[11px] text-slate-400 mt-0.5">
                                 {{ row.participants }} pessoas · {{ row.votes }} votos · {{ row.points }} pts
                             </p>
+                            <p v-if="row.accuracy !== null" class="text-[11px] mt-0.5 font-bold text-slate-300">
+                                ✔ {{ row.correct }} acertos · {{ row.accuracy }}%
+                            </p>
                         </div>
                     </div>
 
-                    <!-- camada 1: ranking individual -->
-                    <table v-else class="w-full text-sm">
-                        <tbody>
-                            <tr v-for="row in individualRanking" :key="row.participant_id" class="border-t border-white/5">
-                                <td class="py-1 text-slate-500 tabular-nums w-8">{{ row.position }}º</td>
-                                <td class="py-1">
-                                    <PixelAvatar :seed="row.avatar_seed" :gender="row.gender" :size="22" />
-                                </td>
-                                <td class="py-1 text-white truncate">{{ row.name }}</td>
-                                <td class="py-1 text-[10px] truncate" :style="{ color: row.mission_color }">
-                                    {{ row.mission }}
-                                </td>
-                                <td class="py-1 text-right font-black tabular-nums text-white">{{ row.points }}</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    <!--
+                        camada 1: a pessoa por inteiro. A Fase 2 não tem voto
+                        individual — a mesa decide por todos —, então "F2" é o
+                        que a mesa dela fez, repetido em cada membro.
+                    -->
+                    <div v-else class="space-y-2">
+                        <div class="flex items-center gap-1 rounded-xl bg-slate-950/60 p-1">
+                            <button
+                                v-for="tab in PERSON_SORTS" :key="tab.key"
+                                class="flex-1 rounded-lg px-2 py-1 text-[11px] font-bold transition"
+                                :class="personSort === tab.key ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'"
+                                @click="personSort = tab.key"
+                            >
+                                {{ tab.label }}
+                            </button>
+                        </div>
+
+                        <table class="w-full text-sm">
+                            <thead class="text-[10px] uppercase tracking-widest text-slate-500">
+                                <tr>
+                                    <th class="text-left pb-1" colspan="2">Pessoa</th>
+                                    <th class="text-right pb-1" title="Pontos da própria decisão, Fase 1">F1</th>
+                                    <th class="text-right pb-1" title="Pontos da mesa desta pessoa, Fase 2">F2</th>
+                                    <th class="text-right pb-1">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr
+                                    v-for="row in peopleRanking" :key="row.participant_id"
+                                    class="border-t border-white/5"
+                                >
+                                    <td class="py-1 text-slate-500 tabular-nums w-7 align-top">{{ row.rank }}º</td>
+                                    <td class="py-1 pr-2">
+                                        <div class="flex items-center gap-1.5 min-w-0">
+                                            <PixelAvatar :seed="row.avatar_seed" :gender="row.gender" :size="20" />
+                                            <span class="min-w-0">
+                                                <span class="flex items-center gap-1">
+                                                    <span
+                                                        class="w-1.5 h-1.5 rounded-full shrink-0"
+                                                        :style="{ background: row.mission_color }"
+                                                        :title="row.mission"
+                                                    />
+                                                    <span class="text-white truncate text-xs font-bold">{{ row.name }}</span>
+                                                </span>
+                                                <span class="block text-[10px] text-slate-500 truncate">
+                                                    {{ row.table_icon }} {{ row.table }} · ✔ {{ row.correct }}/{{ row.answered }}
+                                                </span>
+                                            </span>
+                                        </div>
+                                    </td>
+                                    <td class="py-1 text-right tabular-nums text-xs text-slate-300 align-top">
+                                        {{ row.points }}
+                                    </td>
+                                    <td class="py-1 text-right tabular-nums text-xs align-top"
+                                        :class="row.table_points ? 'text-emerald-300' : 'text-slate-600'">
+                                        {{ row.table_points }}
+                                    </td>
+                                    <td class="py-1 text-right font-black tabular-nums text-white align-top">
+                                        {{ row.combined_points }}
+                                    </td>
+                                </tr>
+                                <tr v-if="!peopleRanking.length">
+                                    <td colspan="5" class="py-3 text-center text-xs text-slate-500 italic">
+                                        Ninguém votou ainda.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
                 <!-- resultado da rodada revelada, para o facilitador narrar -->

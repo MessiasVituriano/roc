@@ -62,6 +62,49 @@ body {
 .animate-done-glow { animation: done-glow 1.6s ease-in-out infinite; }
 .animate-attn { animation: attn 1.4s ease-in-out infinite; }
 
+/* --- marca Sistema IO --- */
+
+/* o azul da marca é escuro para um fundo #020617: um halo frio devolve o
+ * contraste sem lavar as cores originais do logo */
+.brand-glow {
+    filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.35));
+}
+
+@keyframes dot-drop {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-7px); }
+}
+
+@keyframes ring-spin {
+    to { transform: rotate(360deg); }
+}
+
+@keyframes brand-sweep {
+    0% { transform: translateX(-110%); }
+    100% { transform: translateX(320%); }
+}
+
+/* só a marca da tela de carregamento respira — nos cabeçalhos ela fica parada */
+.brand-breathe .io-dot {
+    animation: dot-drop 1.9s ease-in-out infinite;
+}
+
+.brand-breathe .io-ring {
+    transform-box: view-box;
+    transform-origin: 68px 100px;
+    animation: ring-spin 5.5s linear infinite;
+}
+
+.brand-sweep {
+    animation: brand-sweep 1.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .brand-breathe .io-dot,
+    .brand-breathe .io-ring,
+    .brand-sweep { animation: none; }
+}
+
 /* --- shared transitions --- */
 
 .fade-enter-active,

@@ -17,8 +17,15 @@ use Illuminate\Support\Collection;
  * transporte atual — publicar estes mesmos payloads por websocket depois não
  * exige mudança alguma no frontend.
  *
- * Regra central: **nada de resultado antes do clique do facilitador.** Durante
- * a votação o telão vê só quantos votos chegaram, nunca a distribuição.
+ * Duas regras de sigilo, em camadas:
+ *
+ * 1. **Nada de resultado antes do clique do facilitador.** Durante a votação o
+ *    telão vê só quantos votos chegaram, nunca a distribuição.
+ * 2. **Nada de gabarito antes do fim do evento.** Como a Fase 2 repete as
+ *    perguntas da Fase 1, revelar a melhor alternativa numa rodada entregaria a
+ *    resposta da outra. A revelação de cada rodada mostra a *divergência* — a
+ *    distribuição dos votos — e nada mais. Melhor alternativa, pontos e efeitos
+ *    só saem do servidor quando já não dá para usá-los.
  */
 class EventStateService
 {
@@ -30,19 +37,36 @@ class EventStateService
     }
 
     /**
+     * Se a régua (melhor alternativa, pontos, efeitos, acertos) pode ir para a
+     * tela.
+     *
+     * Três portas: o painel do facilitador, que precisa dela para conduzir e
+     * nunca é projetado; o clique deliberado que abre o gabarito e o
+     * comparativo com a sala ainda inteira; e o encerramento, que abre de
+     * qualquer jeito.
+     */
+    public function showsAnswerKey(Event $event, bool $forMaster = false): bool
+    {
+        return $forMaster
+            || $event->answers_revealed
+            || $event->status === Event::STATUS_FINISHED;
+    }
+
+    /**
      * Payload leve, consultado a cada segundo pela tela do participante.
      */
     public function status(Event $event, ?Participant $participant = null): array
     {
         $question = $event->currentQuestion();
         $revealed = $event->round_status === Event::ROUND_REVEALED;
+        $key = $this->showsAnswerKey($event);
 
         $payload = [
             'event' => $this->event($event),
             'timer' => $this->timer($event),
-            'question' => $question ? $this->question($question, revealed: $revealed) : null,
+            'question' => $question ? $this->question($question, withAnswerKey: $key) : null,
             'progress' => $this->progress($event, $question),
-            'results' => $revealed && $question ? $this->results($question) : null,
+            'results' => $revealed && $question ? $this->results($question, withAnswerKey: $key) : null,
         ];
 
         if ($participant) {
@@ -72,9 +96,14 @@ class EventStateService
                 'can_answer' => $this->canAnswer($event, $participant, $table),
                 'has_voted' => $mine !== null,
                 'voted_option_id' => $mine?->option_id,
-                // os pontos da própria escolha só aparecem depois da revelação
-                'round_points' => $revealed ? $mine?->points : null,
-                'total_points' => $this->scores->participantPoints($event, $participant),
+                // Os pontos da própria escolha entregam o gabarito tão bem
+                // quanto o selo de "melhor decisão" — e o total acumulado
+                // entrega por diferença, rodada a rodada. Os dois só aparecem
+                // no fim.
+                'round_points' => $key ? $mine?->points : null,
+                'total_points' => $key ? $this->scores->participantPoints($event, $participant) : null,
+                'correct' => $key ? $this->scores->participantCorrect($event, $participant) : null,
+                'rounds' => $event->roundsInPhase(1),
                 'mission' => $mission ? [
                     'id' => $mission->id,
                     'key' => $mission->key,
@@ -112,6 +141,7 @@ class EventStateService
     {
         $question = $event->currentQuestion();
         $revealed = $event->round_status === Event::ROUND_REVEALED;
+        $key = $this->showsAnswerKey($event, $forMaster);
 
         $voters = $question ? $this->voterIds($question) : collect();
         $answeredTables = $question ? $this->answeredTableIds($question) : collect();
@@ -158,9 +188,9 @@ class EventStateService
         $payload = [
             'event' => $this->event($event),
             'timer' => $this->timer($event),
-            'question' => $question ? $this->question($question, revealed: $revealed, forMaster: $forMaster) : null,
+            'question' => $question ? $this->question($question, withAnswerKey: $key, forMaster: $forMaster) : null,
             'progress' => $this->progress($event, $question),
-            'results' => $revealed && $question ? $this->results($question) : null,
+            'results' => $revealed && $question ? $this->results($question, withAnswerKey: $key) : null,
             'tables' => $tables,
             'stats' => [
                 'participants' => $event->participants()->count(),
@@ -169,18 +199,45 @@ class EventStateService
                     ->count(),
                 'tables' => count($tables),
             ],
-            // camada 3 — sempre disponível, é o placar do critério de vitória
-            'table_ranking' => $this->scores->tableRanking($event),
         ];
 
-        // camada 2 — o viés por missão só vai ao telão na virada de fase
+        // Camada 3 — o placar do critério de vitória. Pontuação é gabarito
+        // disfarçado: numa mesa pequena, `phase_one_points` depois da rodada 1
+        // identifica a alternativa certa por aritmética. Vai para o telão só no
+        // encerramento; o facilitador tem sempre.
+        if ($this->showsAnswerKey($event, $forMaster)) {
+            $payload['table_ranking'] = $this->scores->tableRanking($event);
+            $payload['phase_comparison'] = $this->scores->phaseComparison($event);
+        }
+
+        // camada 2 — o viés por missão só vai ao telão na virada de fase, e os
+        // acertos só junto com o gabarito (a virada acontece antes da Fase 2)
         if ($event->missions_revealed || $forMaster) {
-            $payload['mission_ranking'] = $this->scores->missionRanking($event);
+            $payload['mission_ranking'] = $this->scores->missionRanking($event, withAnswerKey: $key);
+        }
+
+        // o gabarito, enfim: o telão pode mostrar o que a sala passou o evento
+        // inteiro sem saber. Fica fora do payload do master, que já tem
+        // /admin/questions e é consultado a cada segundo.
+        if (! $forMaster && $this->showsAnswerKey($event)) {
+            $payload['answer_key'] = $this->answerKey($event);
+        }
+
+        // Camada 1 — ranking individual. O facilitador tem sempre, para conduzir;
+        // o telão só depois do clique que libera o gabarito, porque pontuação
+        // individual é gabarito com outro nome. É o que premia quem decidiu
+        // melhor sozinho, na tela de encerramento.
+        if ($this->showsAnswerKey($event, $forMaster)) {
+            // O painel recebe a lista inteira porque reordena por individual,
+            // mesa ou total no cliente — truncar aqui esconderia justamente
+            // quem tem individual baixo e mesa alta. O telão só premia o topo.
+            $payload['individual_ranking'] = $this->scores->individualRanking(
+                $event,
+                limit: $forMaster ? 0 : 10,
+            );
         }
 
         if ($forMaster) {
-            // camada 1 — ranking individual, só para o facilitador
-            $payload['individual_ranking'] = $this->scores->individualRanking($event, limit: 20);
             $payload['needs_tie_break'] = $this->scores->needsTieBreak($payload['table_ranking']);
         }
 
@@ -202,6 +259,7 @@ class EventStateService
                 : Question::MODE_CONSENSUS,
             'last_phase' => Event::LAST_PHASE,
             'missions_revealed' => $event->missions_revealed,
+            'answers_revealed' => $event->answers_revealed,
             'voting_open' => $event->isAcceptingVotes(),
         ];
     }
@@ -245,10 +303,14 @@ class EventStateService
     }
 
     /**
-     * Distribuição da rodada, com os pontos de cada alternativa. Só é chamado
-     * depois que o facilitador revelou.
+     * Distribuição da rodada. Só é chamado depois que o facilitador revelou.
+     *
+     * Sem `$withAnswerKey` sai apenas quem votou em quê — a divergência da
+     * sala, que é o que a Fase 1 precisa mostrar. Nem os pontos, nem os
+     * efeitos, nem a ordenação por régua: colocar a melhor alternativa no topo
+     * entrega a resposta com a mesma eficiência de um selo dizendo isso.
      */
-    public function results(Question $question): array
+    public function results(Question $question, bool $withAnswerKey = false): array
     {
         $counts = $question->isIndividual()
             ? ParticipantVote::where('question_id', $question->id)
@@ -261,38 +323,114 @@ class EventStateService
                 ->pluck('total', 'option_id');
 
         $total = (int) $counts->sum();
-        $best = $question->bestOption();
+        $best = $withAnswerKey ? $question->bestOption() : null;
 
-        $rows = $question->options->map(fn ($option) => [
+        $rows = $question->options->map(fn ($option) => array_filter([
             'option_id' => $option->id,
             'text' => $option->text,
-            'effect' => $option->effect,
-            'points' => $option->points,
-            'color' => $option->color,
-            'is_best' => $best !== null && $option->id === $best->id,
             'votes' => (int) ($counts[$option->id] ?? 0),
             'percent' => $total > 0 ? (int) round(($counts[$option->id] ?? 0) / $total * 100) : 0,
-        ])
-            // na revelação a ordem que importa é a da régua de pontos, não a
-            // dos votos: a plateia precisa ver qual era a melhor decisão
-            ->sortByDesc('points')
-            ->values()
-            ->all();
+            'effect' => $withAnswerKey ? $option->effect : null,
+            'points' => $withAnswerKey ? $option->points : null,
+            // a cor é derivada dos pontos (verde = melhor, vermelho = pior):
+            // mandá-la sem gabarito seria mandar o gabarito pintado
+            'color' => $withAnswerKey ? $option->color : null,
+            'is_best' => $withAnswerKey ? ($best !== null && $option->id === $best->id) : null,
+        ], fn ($value) => $value !== null));
+
+        // com gabarito, a ordem que importa é a da régua — a plateia precisa
+        // ver qual era a melhor decisão. Sem ele, a ordem original da pergunta,
+        // a mesma em que as pessoas votaram.
+        $rows = $withAnswerKey ? $rows->sortByDesc('points') : $rows;
 
         return [
             'mode' => $question->mode,
             'unit' => $question->isIndividual() ? 'participants' : 'tables',
             'total_votes' => $total,
-            'options' => $rows,
+            'has_answer_key' => $withAnswerKey,
+            'options' => $rows->values()->all(),
         ];
     }
 
     /**
-     * A pergunta como ela pode ser vista agora. Antes da revelação, os pontos
-     * e os efeitos das alternativas são omitidos — senão bastaria abrir o
-     * DevTools para saber a resposta certa.
+     * O gabarito completo, liberado só no encerramento.
+     *
+     * As duas fases fazem as mesmas perguntas, então cada rodada aparece uma
+     * vez só, com as duas leituras lado a lado: quanta gente acertou sozinha na
+     * Fase 1 e quantas mesas acertaram juntas na Fase 2. Essa comparação é o
+     * que a dinâmica inteira existe para produzir.
+     *
+     * @return array<int, array<string, mixed>>
      */
-    public function question(Question $question, bool $revealed = false, bool $forMaster = false): array
+    public function answerKey(Event $event): array
+    {
+        $questions = $event->questions()->with('options')->where('is_bonus', false)->get();
+        $ids = $questions->pluck('id');
+
+        $tally = fn (string $model) => $model::whereIn('question_id', $ids)
+            ->selectRaw('question_id, option_id, count(*) as total')
+            ->groupBy('question_id', 'option_id')
+            ->get()
+            ->mapWithKeys(fn ($row) => ["{$row->question_id}:{$row->option_id}" => (int) $row->total]);
+
+        $byPerson = $tally(ParticipantVote::class);
+        $byTable = $tally(TableVote::class);
+
+        return $questions
+            ->groupBy('round')
+            ->sortKeys()
+            ->map(function (Collection $round) use ($byPerson, $byTable) {
+                $one = $round->firstWhere('phase', 1) ?? $round->first();
+                $two = $round->firstWhere('phase', 2);
+                // as alternativas espelhadas casam pela ordem, não pelo id
+                $mirrors = $two?->options->keyBy('order') ?? collect();
+                $best = $one->bestOption();
+
+                $options = $one->options->map(function ($option) use ($one, $two, $mirrors, $byPerson, $byTable, $best) {
+                    $mirror = $mirrors->get($option->order);
+
+                    return [
+                        'text' => $option->text,
+                        'effect' => $option->effect,
+                        'points' => $option->points,
+                        'color' => $option->color,
+                        'is_best' => $best !== null && $option->id === $best->id,
+                        'individual_votes' => $byPerson["{$one->id}:{$option->id}"] ?? 0,
+                        'table_votes' => $two && $mirror ? ($byTable["{$two->id}:{$mirror->id}"] ?? 0) : 0,
+                    ];
+                });
+
+                $people = $options->sum('individual_votes');
+                $tables = $options->sum('table_votes');
+                $winner = $options->firstWhere('is_best', true);
+
+                return [
+                    'round' => $one->round,
+                    'label' => $one->label,
+                    'title' => $one->title,
+                    'best_text' => $winner['text'] ?? null,
+                    'best_effect' => $winner['effect'] ?? null,
+                    'best_points' => $winner['points'] ?? null,
+                    // sozinho contra junto, na mesma pergunta
+                    'individual_accuracy' => $people > 0
+                        ? (int) round(($winner['individual_votes'] ?? 0) / $people * 100)
+                        : null,
+                    'table_accuracy' => $tables > 0
+                        ? (int) round(($winner['table_votes'] ?? 0) / $tables * 100)
+                        : null,
+                    'options' => $options->sortByDesc('points')->values()->all(),
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * A pergunta como ela pode ser vista agora. Os pontos e os efeitos das
+     * alternativas ficam de fora até o fim do evento — senão bastaria abrir o
+     * DevTools para saber a resposta certa, e ela vale para as duas fases.
+     */
+    public function question(Question $question, bool $withAnswerKey = false, bool $forMaster = false): array
     {
         $data = [
             'id' => $question->id,
@@ -307,10 +445,11 @@ class EventStateService
             'options' => $question->options->map(fn ($o) => array_filter([
                 'id' => $o->id,
                 'text' => $o->text,
-                'color' => $o->color,
                 'order' => $o->order,
-                'effect' => ($revealed || $forMaster) ? $o->effect : null,
-                'points' => ($revealed || $forMaster) ? $o->points : null,
+                'effect' => ($withAnswerKey || $forMaster) ? $o->effect : null,
+                'points' => ($withAnswerKey || $forMaster) ? $o->points : null,
+                // `color` vem de `colorForPoints()` — é a régua em hexadecimal
+                'color' => ($withAnswerKey || $forMaster) ? $o->color : null,
             ], fn ($value) => $value !== null))->all(),
         ];
 

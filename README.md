@@ -1,4 +1,4 @@
-# Sala de Decisão ROC
+# Sistema IO — Sala de Decisões ROC
 
 Dinâmica de decisão para auditórios, conduzida ao vivo por um facilitador.
 Especificação de conteúdo e regras: [`docs/dinamica-roc.md`](docs/dinamica-roc.md).
@@ -7,7 +7,13 @@ Especificação de conteúdo e regras: [`docs/dinamica-roc.md`](docs/dinamica-ro
   Cada pessoa recebe uma **missão sorteada** e decide com ela.
 - **Virada de fase.** O placar **por grupo de missão** vai ao telão: mesma
   régua, missões diferentes, decisões diferentes.
-- **Fase 2 — mesa.** 1 rodada de consenso, registrada pelo representante.
+- **Fase 2 — mesa.** **As mesmas 5 perguntas da Fase 1**, agora decididas em
+  consenso e registradas pelo representante (~90s por rodada). Repetir o
+  cenário é o que torna a comparação honesta: muda uma variável só — decidir
+  sozinho contra decidir junto.
+- **O comparativo.** O fecho: o gabarito de cada rodada e o **Fase 1 × Fase 2**
+  lado a lado — acerto decidindo sozinho contra acerto decidindo em mesa, no
+  geral e rodada a rodada. É a prova numérica do objetivo da dinâmica.
 
 Cada alternativa vale pontos fixos (**+150 / +80 / 0 / −50**) e nada disso
 aparece antes do **clique do facilitador**.
@@ -73,22 +79,48 @@ placar da virada de fase ficar legível no ensaio.
 | 1 | **Abrir Evento** | participantes entram, escolhem a mesa e recebem a missão |
 | 2 | **▶ Abrir votação da rodada** | cronômetro corre, votos são aceitos |
 | 3 | **⏹ Encerrar votação** | (opcional) fecha antes do tempo |
-| 4 | **📊 REVELAR no telão** | consequência, pontos e distribuição vão ao telão |
+| 4 | **📊 REVELAR no telão** | a distribuição dos votos vai ao telão (sem gabarito) |
 | 5 | **⏭ Próxima rodada** | carrega a rodada seguinte |
 | 6 | **🎭 Revelar placar por missão** | a virada de fase |
-| 7 | **➡ Ir para a Fase 2** | rodada de consenso por mesa |
-| 8 | **🎲 Rodada de desempate** | só se o empate sobreviver aos 3 primeiros critérios |
-| 9 | **🏁 Finalizar evento** | telão mostra a mesa vencedora |
+| 7 | **➡ Ir para a Fase 2** | as mesmas 5 rodadas, agora em consenso de mesa |
+| 8 | **🔓 Revelar gabarito + comparativo** | **o fecho:** gabarito de cada rodada e Fase 1 × Fase 2 no telão |
+| 9 | **🎲 Rodada de desempate** | só se o empate sobreviver aos 3 primeiros critérios |
+| 10 | **🏁 Finalizar evento** | telão mostra a mesa vencedora |
+
+Os passos **6** e **8** são os dois momentos deliberados do facilitador — o
+telão só muda quando ele clica. O passo 8 é separado do 10 de propósito:
+encerrar joga os celulares na tela de "obrigado", enquanto revelar o gabarito
+mantém a sala inteira olhando para o telão.
 
 `+10s` / `+30s` estendem a rodada, e *Zerar votos da rodada* existe como saída
 de emergência.
 
 ## Regras de negócio
 
-- **Nada de gabarito antes da revelação.** Durante a votação, os pontos e os
-  efeitos das alternativas **não são serializados** — o telão mostra só quantos
-  votos chegaram. Não adianta abrir o DevTools. A nota de viés de cada rodada
-  existe só no `/api/admin/overview`.
+- **Sigilo em duas camadas.** Durante a votação o telão mostra só quantos votos
+  chegaram. Na revelação da rodada mostra a **distribuição** — quem votou em quê
+  — e nada mais. O **gabarito** (melhor alternativa, pontos, efeitos, cor da
+  alternativa, acertos) só sai do servidor quando o facilitador clica em
+  **🔓 Revelar gabarito + comparativo** (ou quando o evento é encerrado) — e no
+  `/api/admin/overview`, que nunca é projetado.
+
+  A segunda camada existe porque a Fase 2 repete as perguntas da Fase 1:
+  revelar a melhor decisão numa rodada entregaria a resposta da outra. E o
+  gabarito vaza por mais caminhos do que parece — todos fechados e cobertos por
+  teste:
+
+  | Caminho | Por que entrega |
+  |---|---|
+  | `is_best`, `points`, `effect` | direto |
+  | `color` da alternativa | vem de `colorForPoints()` — verde é +150, vermelho é −50 |
+  | ordenação da revelação | ordenar por régua põe a melhor sempre no topo |
+  | `me.round_points` / `me.total_points` | o total entrega por diferença entre rodadas |
+  | `me.correct` | saber que acertou é saber qual era a certa |
+  | `table_ranking` | numa mesa pequena, `phase_one_points` é aritmética simples |
+  | acertos por missão | com poucas pessoas no grupo, “100% de acerto” identifica a alternativa |
+
+  Na revelação as barras usam uma paleta neutra por posição (A/B/C/D), não a
+  cor da régua.
 - **Pontos congelados no voto.** Cada linha de voto guarda os pontos da
   alternativa escolhida, então corrigir a régua no meio do evento não reescreve
   o placar já formado.
@@ -170,7 +202,8 @@ mesmo estágio PHP, então os assets compilados nunca ficam dessincronizados.
 php artisan test
 ```
 
-Cobrem o sigilo do gabarito até a revelação, o congelamento dos pontos no voto,
+Cobrem o sigilo do gabarito até o encerramento (por todos os caminhos da tabela
+acima), a contagem de acertos nas duas fases, o congelamento dos pontos no voto,
 a distribuição equilibrada das missões, o placar por missão revelando o viés, o
 travamento do representante na Fase 2, o critério de vitória em 4 níveis com a
 detecção de empate na liderança, e a travessia das 5 rodadas até a Fase 2.
@@ -181,9 +214,15 @@ Missões, rodadas, alternativas e pontos ficam em
 `database/seeders/LiveConsensusSeeder.php`. Trocar o conteúdo é editar esse
 arquivo — nada no código depende do texto.
 
-> ⚠️ **Pendente:** a apresentação não define o cenário da **Fase 2** nem a
-> **pergunta bônus de desempate**. As duas estão no seeder como
-> `[PREENCHER]`, com a mecânica pronta e a régua de pontos já aplicada.
+O seeder descreve **só a Fase 1**. A Fase 2 é gerada a partir dela por
+`mirrorPhaseTwo()`: mesmo título, mesmo cenário, mesmas alternativas e mesma
+régua, trocando `mode` para `consensus` e a duração para
+`LiveConsensusSeeder::CONSENSUS_DURATION`. Editar um cenário muda as duas fases
+de uma vez — não há texto duplicado para sair de sincronia.
+
+> ⚠️ **Pendente:** a apresentação não define a **pergunta bônus de desempate**.
+> Ela está no seeder como `[PREENCHER]` (Fase 2, rodada 6, `is_bonus`), com a
+> mecânica pronta e a régua de pontos já aplicada.
 
 ## Estendendo
 

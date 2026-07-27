@@ -7,6 +7,8 @@ import PixelAvatar from '../components/PixelAvatar.vue'
 import CountdownTimer from '../components/CountdownTimer.vue'
 import MissionCard from '../components/MissionCard.vue'
 import ProgressBar from '../components/ProgressBar.vue'
+import BrandLogo from '../components/BrandLogo.vue'
+import LoadingScreen from '../components/LoadingScreen.vue'
 
 const router = useRouter()
 
@@ -14,7 +16,7 @@ const selected = ref(null)
 const sending = ref(false)
 const voteError = ref('')
 
-const { data: state, online } = usePolling(() => api.get('/status'), { interval: 1000 })
+const { data: state, error: stateError, online } = usePolling(() => api.get('/status'), { interval: 1000 })
 
 const me = computed(() => state.value?.me ?? null)
 const table = computed(() => state.value?.my_table ?? null)
@@ -35,6 +37,11 @@ const myOption = computed(
 const myResult = computed(
     () => results.value?.options.find((o) => o.option_id === me.value?.voted_option_id) ?? null,
 )
+
+// a cor real da alternativa é derivada dos pontos — só chega junto com o
+// gabarito. Antes disso, estas quatro apenas separam A/B/C/D.
+const NEUTRAL_BARS = ['#6366f1', '#22d3ee', '#a78bfa', '#f472b6']
+const barColor = (option, i) => option.color ?? NEUTRAL_BARS[i % NEUTRAL_BARS.length]
 
 const screen = computed(() => {
     if (!event.value) return 'closed'
@@ -112,25 +119,36 @@ function leave() {
 </script>
 
 <template>
-    <div class="min-h-dvh flex flex-col">
+    <!-- o /status ainda não voltou: a marca segura enquanto o celular conecta -->
+    <LoadingScreen
+        v-if="!state"
+        :label="stateError ? 'Sem conexão — tentando de novo…' : 'Entrando na sala…'"
+    />
+
+    <div v-else class="min-h-dvh flex flex-col">
+        <!-- a marca fica na primeira linha, sempre; a mesa entra abaixo quando existe -->
         <header
-            v-if="table"
-            class="sticky top-0 z-20 px-4 py-3 flex items-center gap-3 bg-slate-950/85 backdrop-blur ring-1 ring-white/5"
-            :style="{ borderBottom: `2px solid ${table.color}` }"
+            class="sticky top-0 z-20 bg-slate-950/85 backdrop-blur ring-1 ring-white/5"
+            :style="table ? { borderBottom: `2px solid ${table.color}` } : {}"
         >
-            <span class="text-2xl">{{ table.icon }}</span>
-            <div class="min-w-0">
-                <p class="font-black text-white leading-tight truncate">{{ table.name }}</p>
-                <p class="text-[11px] text-slate-400 truncate">
-                    {{ me?.name }}
-                    <span v-if="me?.is_representative" class="text-amber-300 font-bold">· representante</span>
-                </p>
+            <div class="px-4 pt-2.5 pb-2 flex items-center gap-3">
+                <BrandLogo size="xs" :tagline="false" />
+                <span
+                    class="ml-auto w-2.5 h-2.5 rounded-full transition-colors"
+                    :class="online ? 'bg-emerald-400 shadow-[0_0_10px] shadow-emerald-400' : 'bg-rose-500 animate-pulse'"
+                />
             </div>
-            <span
-                class="ml-auto w-2.5 h-2.5 rounded-full transition-colors"
-                :class="online ? 'bg-emerald-400 shadow-[0_0_10px] shadow-emerald-400' : 'bg-rose-500 animate-pulse'"
-            />
-            <PixelAvatar v-if="me" :seed="me.avatar_seed" :gender="me.gender" :size="34" />
+            <div v-if="table" class="px-4 pb-2.5 pt-2 flex items-center gap-3 border-t border-white/5">
+                <span class="text-2xl">{{ table.icon }}</span>
+                <div class="min-w-0">
+                    <p class="font-black text-white leading-tight truncate">{{ table.name }}</p>
+                    <p class="text-[11px] text-slate-400 truncate">
+                        {{ me?.name }}
+                        <span v-if="me?.is_representative" class="text-amber-300 font-bold">· representante</span>
+                    </p>
+                </div>
+                <PixelAvatar v-if="me" :seed="me.avatar_seed" :gender="me.gender" :size="34" class="ml-auto" />
+            </div>
         </header>
 
         <main class="flex-1 p-5 flex flex-col">
@@ -268,32 +286,48 @@ function leave() {
                     </div>
                 </section>
 
-                <!-- revelação -->
+                <!--
+                    Revelação: a sala, não o gabarito. Sem pontos da rodada e
+                    sem total acumulado — os dois entregariam a resposta, que
+                    volta a valer nas rodadas da Fase 2.
+                -->
                 <section v-else-if="screen === 'revealed'" key="revealed" class="flex-1 flex flex-col gap-4">
                     <p class="text-[11px] font-bold uppercase tracking-widest text-fuchsia-300">
-                        Resultado · rodada {{ event.round }}
+                        Como a sala decidiu · rodada {{ event.round }}
                     </p>
                     <h2 class="text-lg font-black text-white leading-snug">{{ question?.title }}</h2>
 
-                    <div v-if="myResult" class="rounded-3xl p-5 text-center ring-2" :class="myResult.points > 0 ? 'ring-emerald-400 bg-emerald-500/10' : 'ring-rose-400 bg-rose-500/10'">
-                        <p class="text-xs uppercase tracking-widest text-slate-400">Sua decisão</p>
-                        <p class="text-white font-bold mt-1">{{ myResult.text }}</p>
-                        <p
-                            class="text-4xl font-black mt-2 tabular-nums"
-                            :class="myResult.points > 0 ? 'text-emerald-300' : myResult.points < 0 ? 'text-rose-300' : 'text-slate-300'"
-                        >
-                            {{ myResult.points > 0 ? '+' : '' }}{{ myResult.points }}
-                        </p>
-                        <p v-if="myResult.effect" class="text-xs text-slate-400 mt-2 leading-relaxed">
-                            {{ myResult.effect }}
-                        </p>
+                    <div v-if="myResult" class="rounded-2xl bg-slate-800/70 ring-1 ring-white/15 p-4 text-center">
+                        <p class="text-[11px] uppercase tracking-widest text-slate-400">Sua decisão</p>
+                        <p class="text-white font-bold mt-1 leading-snug">{{ myResult.text }}</p>
                     </div>
                     <p v-else class="text-center text-slate-500 text-sm">Você não votou nesta rodada.</p>
 
-                    <div class="rounded-2xl bg-slate-900/70 ring-1 ring-white/10 p-4 text-center mt-auto">
-                        <p class="text-xs uppercase tracking-widest text-slate-400">Seu total</p>
-                        <p class="text-3xl font-black text-white tabular-nums">{{ me?.total_points ?? 0 }}</p>
+                    <div class="space-y-2.5">
+                        <div v-for="(option, i) in results?.options" :key="option.option_id">
+                            <div class="flex items-baseline gap-2 text-sm">
+                                <span class="text-amber-300 font-black">{{ 'ABCD'[i] }})</span>
+                                <span
+                                    class="flex-1 min-w-0 leading-snug"
+                                    :class="option.option_id === me?.voted_option_id ? 'text-white font-bold' : 'text-slate-400'"
+                                >
+                                    {{ option.text }}
+                                </span>
+                                <span class="tabular-nums font-black text-white shrink-0">{{ option.percent }}%</span>
+                            </div>
+                            <div class="mt-1 h-2 rounded-full bg-slate-800 overflow-hidden">
+                                <div
+                                    class="h-full rounded-full transition-all duration-1000"
+                                    :style="{ width: option.percent + '%', background: barColor(option, i) }"
+                                />
+                            </div>
+                        </div>
                     </div>
+
+                    <p class="mt-auto rounded-2xl bg-slate-900/70 ring-1 ring-white/10 px-4 py-3 text-center text-xs text-slate-400">
+                        Qual era a melhor decisão para o hotel — e quantos pontos você fez —
+                        só no <strong class="text-slate-200">placar final</strong>.
+                    </p>
                 </section>
 
                 <section v-else-if="screen === 'finished'" key="finished" class="flex-1 grid place-items-center text-center">
@@ -302,11 +336,24 @@ function leave() {
                         <h2 class="text-3xl font-black bg-gradient-to-r from-amber-200 to-fuchsia-300 bg-clip-text text-transparent">
                             Obrigado!
                         </h2>
-                        <div class="rounded-2xl bg-slate-900/70 ring-1 ring-white/10 px-8 py-4">
-                            <p class="text-xs uppercase tracking-widest text-slate-400">Valor que você gerou</p>
-                            <p class="text-4xl font-black text-white tabular-nums">{{ me?.total_points ?? 0 }}</p>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div class="rounded-2xl bg-slate-900/70 ring-1 ring-white/10 px-5 py-4">
+                                <p class="text-[10px] uppercase tracking-widest text-slate-400">Seus acertos</p>
+                                <p class="text-3xl font-black text-emerald-300 tabular-nums">
+                                    {{ me?.correct ?? 0 }}<span class="text-slate-500 text-lg">/{{ me?.rounds ?? 5 }}</span>
+                                </p>
+                                <p class="text-[10px] text-slate-500 mt-0.5">decidindo sozinho</p>
+                            </div>
+                            <div class="rounded-2xl bg-slate-900/70 ring-1 ring-white/10 px-5 py-4">
+                                <p class="text-[10px] uppercase tracking-widest text-slate-400">Valor gerado</p>
+                                <p class="text-3xl font-black text-white tabular-nums">{{ me?.total_points ?? 0 }}</p>
+                                <p class="text-[10px] text-slate-500 mt-0.5">pontos na Fase 1</p>
+                            </div>
                         </div>
                         <button class="text-xs text-slate-500 underline pt-2" @click="leave">Sair</button>
+                        <div class="grid place-items-center pt-4">
+                            <BrandLogo size="sm" stacked />
+                        </div>
                     </div>
                 </section>
 
