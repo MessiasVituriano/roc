@@ -52,7 +52,13 @@ services:
             POSTGRES_USER: ${DB_USERNAME:-roc}
             POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
         volumes:
-            - pgdata:/var/lib/postgresql/data
+            # A imagem do Postgres 18 declara VOLUME /var/lib/postgresql e põe o
+            # PGDATA em /var/lib/postgresql/18/docker — não mais no
+            # /var/lib/postgresql/data das versões antigas. Montar no caminho
+            # antigo aninha um volume dentro do volume da imagem e deixa o banco
+            # gravando num volume anônimo, que vira lixo órfão no próximo
+            # `up --force-recreate`: o evento inteiro sumiria.
+            - pgdata:/var/lib/postgresql
         healthcheck:
             test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME:-roc}']
             interval: 5s
