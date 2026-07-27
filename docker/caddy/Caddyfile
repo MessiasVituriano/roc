@@ -1,0 +1,31 @@
+# Terminação de TLS na frente do nginx.
+#
+# O endereço vem de APP_DOMAIN (definido no .env, repassado pelo compose):
+#
+#   APP_DOMAIN=roc.suaempresa.com.br    → HTTPS com certificado Let's Encrypt
+#                                         emitido e renovado sozinho
+#   APP_DOMAIN=203-0-113-10.sslip.io    → idem, sem precisar ter domínio: o
+#                                         sslip.io resolve qualquer IP embutido
+#                                         no nome, e o Let's Encrypt emite
+#                                         certificado para ele normalmente
+#   APP_DOMAIN=:80                      → HTTP puro, sem certificado (default)
+#
+# O modo HTTP existe para testar a stack numa máquina sem DNS. Para o evento de
+# verdade use um dos dois primeiros: o telão mostra um QR Code, e navegador
+# moderno em HTTP puro põe aviso de "site não seguro" na mão de 150 pessoas
+# logo na tela de cadastro, que é onde elas digitam nome e e-mail.
+#
+# Emitir o certificado exige que o nome já aponte para o IP do servidor e que as
+# portas 80 e 443 estejam abertas — o Let's Encrypt valida entrando pela 80.
+{$APP_DOMAIN} {
+	encode gzip
+
+	reverse_proxy nginx:80
+
+	# Mesmo motivo do `access_log off` no nginx: 152 req/s de poll geram
+	# ~9 mil linhas por minuto que não dizem nada sobre o evento. O que
+	# interessa (erro de aplicação) sai no log do container app.
+	log {
+		output discard
+	}
+}

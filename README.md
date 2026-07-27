@@ -72,6 +72,82 @@ php artisan live:demo --participants=0 --progress=80  # 80% da rodada atual já 
 O `--progress` respeita a rodada corrente e embute o viés da missão, para o
 placar da virada de fase ficar legível no ensaio.
 
+## Subindo em produção
+
+Tudo que o evento precisa está no `docker-compose.yml`: Caddy (TLS) → nginx →
+php-fpm → Postgres. Uma VPS de **2 vCPU / 4 GB** dá conta com folga.
+
+```bash
+git clone <repo> roc && cd roc
+cp .env.example .env
+```
+
+No `.env`, o que muda em relação ao local:
+
+```ini
+APP_ENV=production
+APP_DEBUG=false
+APP_KEY=              # gere com o comando abaixo
+APP_URL=https://SEU-ENDERECO
+APP_DOMAIN=SEU-ENDERECO   # sem domínio? use 203-0-113-10.sslip.io
+DB_PASSWORD=<senha-forte>
+MASTER_TOKEN=<token-forte>   # quem tiver isso conduz o evento
+```
+
+`APP_KEY` sem precisar de PHP na máquina:
+
+```bash
+docker run --rm php:8.4-cli-alpine php -r \
+    'echo "base64:".base64_encode(random_bytes(32))."\n";'
+```
+
+Suba e semeie:
+
+```bash
+docker compose up -d --build
+docker compose exec app php artisan db:seed --force
+```
+
+O [entrypoint](docker/php/entrypoint.sh) roda `migrate --force` sozinho a cada
+boot e, com `APP_ENV != local`, faz `config:cache`, `route:cache` e
+`view:cache`. **O seed é o único passo manual** — ele cria o evento, as 20 mesas
+e os 2 blocos de perguntas, e rodar de novo duplicaria tudo.
+
+Health check em `/up`. Logs: `docker compose logs -f app`.
+
+### Sobre o TLS
+
+`APP_DOMAIN` é a única chave: com um nome real o Caddy emite e renova o
+certificado sozinho; com `:80` ele serve HTTP puro (só para testar a stack).
+Não vá para o evento em HTTP — o telão projeta um QR Code, e o aviso de "site
+não seguro" aparece justamente na tela onde 150 pessoas digitam nome e e-mail.
+
+Sem domínio próprio, `sslip.io` resolve qualquer IP embutido no nome
+(`203-0-113-10.sslip.io` → `203.0.113.10`) e o Let's Encrypt emite certificado
+para ele normalmente. Em qualquer um dos casos, as portas 80 e 443 precisam
+estar abertas: a validação do certificado entra pela 80.
+
+Nginx e php-fpm não publicam porta — só o Caddy alcança eles. É isso que torna
+o `trustProxies(at: '*')` do [bootstrap/app.php](bootstrap/app.php) seguro.
+
+### Dimensionamento
+
+O pool do php-fpm está em [docker/php/zzz-pool.conf](docker/php/zzz-pool.conf)
+com 32 workers `static`. O default da imagem oficial é 5, dimensionado para um
+site comum — aqui são ~152 req/s constantes (150 celulares + telão + master,
+todos com poll de 1s). Medido com `ab -n 1500 -c 150` no `/api/display`:
+
+| Pool | Throughput | p99 |
+|---|---|---|
+| default da imagem (5) | 285 req/s | 664 ms |
+| este arquivo (32) | 403 req/s | 474 ms |
+
+Os 5 workers aguentariam o evento — cada request é ~3ms — mas com 1,9x de folga
+num endpoint leve. Os 32 dão 2,6x, e a margem é para os endpoints pesados
+(`/api/admin/overview`) e para a rajada de votos na abertura da rodada.
+
+Numa VPS de 2 GB, baixe para 16: ainda é bem mais que o pico real.
+
 ## Roteiro do evento
 
 | Passo | Botão no painel | O que acontece |
