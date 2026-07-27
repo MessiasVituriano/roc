@@ -35,6 +35,7 @@ class Event extends Model
             'current_round' => 'integer',
             'round_duration' => 'integer',
             'missions_revealed' => 'boolean',
+            'answers_revealed' => 'boolean',
             'round_started_at' => 'datetime',
             'round_ends_at' => 'datetime',
             'started_at' => 'datetime',

@@ -1,4 +1,4 @@
-# Sala de Decisão ROC — especificação extraída da apresentação
+# Sala de Decisões ROC — especificação extraída da apresentação
 
 Fonte: `Sala de Decisao ROC Apresentacao.pdf` (19 slides), apresentação para a
 organização do evento. Este documento é a referência de conteúdo e de regras;
@@ -45,24 +45,50 @@ da virada de fase.
 ### Virada de fase
 - Revelação do **placar por grupo de missão** — o momento-chave.
 
+### O comparativo (implementado, não previsto no PDF)
+- Um segundo momento deliberado do facilitador, depois da Fase 2: o telão abre
+  o **gabarito** de cada rodada e o **comparativo Fase 1 × Fase 2** — acerto
+  decidindo sozinho contra acerto decidindo em mesa, no total e rodada a rodada.
+- Só existe porque as duas fases fazem as mesmas perguntas: a diferença isola
+  uma variável só. É a prova numérica do objetivo 2 lá do começo deste
+  documento, que o PDF enuncia mas não diz como medir.
+
 ### Fase 2 — mesa
 - Acesso por **código de mesa**; voto por **consenso**.
 - Todas as missões se fundem em uma só: **maximizar o resultado total do hotel**.
 - **1 rodada** de decisão conjunta.
 - Gera **pontuação de mesa**, separada da soma individual dos membros.
 
-### Roteiro (20 min)
+> **Decisão de implementação — diverge do PDF.** A Fase 2 implementada repete
+> **as mesmas 5 perguntas da Fase 1**, uma por rodada, agora em consenso. O PDF
+> pedia uma rodada única com cenário próprio, que ele nunca chegou a
+> especificar. Repetir a Fase 1 resolve os dois problemas: não inventa conteúdo
+> de hotelaria, e torna o objetivo 2 da dinâmica (“a decisão conjunta supera a
+> soma das isoladas”) diretamente mensurável — mesmo cenário, mesma régua, só
+> muda decidir sozinho contra decidir junto.
+
+### Roteiro (~30 min)
 
 | Etapa | Tempo | Observação |
 |---|---|---|
 | Abertura e contexto | 1 min | facilitador apresenta o cenário do hotel |
 | Fase 1 — 5 rodadas individuais | 6 min | **~20s de votação + 20s de revelação por rodada** |
 | Virada de fase (revelação por grupo de missão) | 2 min | o viés aparece no placar |
-| Fase 2 — 1 rodada por mesa | 3 min | mesa decide por consenso |
+| Fase 2 — as mesmas 5 rodadas, por mesa | 12 min | **~90s de consenso + revelação por rodada** |
+| **O comparativo** (gabarito + Fase 1 × Fase 2) | 3 min | a prova numérica do objetivo 2 |
 | Placar final e desempate | 2 min | critério em 4 níveis |
 | Mensagem de fechamento | 3 min | |
 
-Total ~17 min + 3 min de margem. O roteiro pressupõe facilitador experiente.
+Total ~26 min + margem. O roteiro pressupõe facilitador experiente.
+
+> A Fase 2 é a etapa que mais estica o relógio: cinco rodadas de consenso em vez
+> da rodada única do PDF. Duas saídas para caber em menos tempo:
+>
+> - **encurtar** — baixar `LiveConsensusSeeder::CONSENSUS_DURATION` (padrão 90s)
+>   antes de semear. Ao vivo, **⏹ Encerrar** corta a rodada a qualquer momento e
+>   **+10s / +30s** a estica;
+> - **pular** — rodar só as rodadas mais polêmicas: **⏭ Próxima rodada** avança
+>   sem exigir que a anterior tenha sido votada.
 
 ## 4. Pontuação (novo — não existe no sistema hoje)
 
@@ -139,10 +165,15 @@ Cada alternativa vale pontos fixos. Régua usada em todas as rodadas:
 
 *Viés:* Ocupação tende à A; Diária Média tende à D.
 
-### Fase 2 — rodada única por mesa
-**O PDF não especifica o cenário desta rodada.** Define apenas que todas as
-missões se fundem em “maximizar o resultado total do hotel”, que a decisão é
-por consenso e que gera pontuação de mesa separada.
+### Fase 2 — as mesmas 5 rodadas, agora por mesa
+**O PDF não especifica um cenário próprio para a Fase 2.** Define apenas que
+todas as missões se fundem em “maximizar o resultado total do hotel”, que a
+decisão é por consenso e que gera pontuação de mesa separada.
+
+O sistema resolve isso **reexecutando as cinco rodadas acima** em modo consenso
+(~90s cada, ajustável no painel). Nada de conteúdo novo: mesmos títulos,
+cenários, alternativas e pontos. A mesa reencontra exatamente as decisões que
+cada um tomou sozinho — e o placar mostra o quanto a conversa valeu.
 
 ### Desempate — rodada bônus
 Pergunta bônus única, decidida por consenso da mesa em 60 segundos. **O PDF não
@@ -155,14 +186,19 @@ especifica o conteúdo dessa pergunta.**
 3. **Maior evolução Fase 1 → Fase 2** — premia quem mais aprendeu em tempo real
 4. **Rodada de desempate ao vivo** — pergunta bônus, consenso da mesa, 60s
 
-Placar sempre visível no telão em tempo real.
+> **Decisão de implementação — diverge do PDF.** O PDF pede “placar sempre
+> visível no telão em tempo real”. Como a Fase 2 repete as perguntas da Fase 1,
+> pontuação ao vivo é gabarito ao vivo: numa mesa pequena, o total da Fase 1
+> depois da rodada 1 identifica a alternativa certa por aritmética. O telão
+> mostra a **distribuição dos votos** a cada revelação e o **placar completo com
+> o gabarito** no encerramento. O facilitador vê tudo o tempo todo no painel.
 
 ## 6. As três telas
 
 | Tela | Papel |
 |---|---|
 | Celular | Fase 1: código pessoal, voto individual e sigiloso. Fase 2: código de mesa, voto por consenso. |
-| Telão | Pergunta, tempo, votos chegando e — **só após o clique do facilitador** — a consequência e o placar. |
+| Telão | Pergunta, tempo, votos chegando e — **só após o clique do facilitador** — a distribuição dos votos. O gabarito e o placar, só no encerramento. |
 | Painel Master | Senha do facilitador. Controla rodadas, revela resultados e ajusta o placar em tempo real. |
 
 Sem app: acesso por link ou QR code nas duas fases.

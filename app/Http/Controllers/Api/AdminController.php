@@ -71,6 +71,16 @@ class AdminController extends Controller
         return $this->respond($this->flow->nextRound($this->requireEvent()));
     }
 
+    /** Os +10s / +30s do painel: estica a rodada sem reiniciar o cronômetro. */
+    public function addTime(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'seconds' => ['required', 'integer', 'min:1', 'max:600'],
+        ]);
+
+        return $this->respond($this->flow->addTime($this->requireEvent(), $data['seconds']));
+    }
+
     /** A virada de fase: placar por grupo de missão no telão. */
     public function revealMissions(): JsonResponse
     {
@@ -80,6 +90,17 @@ class AdminController extends Controller
     public function hideMissions(): JsonResponse
     {
         return $this->respond($this->flow->hideMissions($this->requireEvent()));
+    }
+
+    /** O fecho: gabarito e comparativo entre as fases vão ao telão. */
+    public function revealAnswers(): JsonResponse
+    {
+        return $this->respond($this->flow->revealAnswers($this->requireEvent()));
+    }
+
+    public function hideAnswers(): JsonResponse
+    {
+        return $this->respond($this->flow->hideAnswers($this->requireEvent()));
     }
 
     public function nextPhase(): JsonResponse
@@ -244,7 +265,7 @@ class AdminController extends Controller
                 ->orderBy('phase')
                 ->orderBy('round')
                 ->get()
-                ->map(fn ($q) => $this->state->question($q, revealed: true, forMaster: true))
+                ->map(fn ($q) => $this->state->question($q, withAnswerKey: true, forMaster: true))
         );
     }
 

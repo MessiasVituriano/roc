@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router'
 import { api, participantToken } from '../lib/api'
 import { usePolling } from '../composables/usePolling'
 import PixelAvatar from '../components/PixelAvatar.vue'
+import BrandLogo from '../components/BrandLogo.vue'
+import LoadingScreen from '../components/LoadingScreen.vue'
 import { CLOTHES, HAIRS, SKINS, STYLES, encodeAvatar, randomAvatarParts } from '../lib/avatar'
 
 const router = useRouter()
@@ -23,7 +25,7 @@ const submitting = ref(false)
 // mantém o status do evento vivo: se o facilitador abrir depois que a pessoa
 // carregou a tela, o botão "Entrar" destrava sozinho (e as contagens de mesa
 // ficam frescas). Pausa quando o celular está no bolso — cortesia do usePolling.
-const { data: boot, start, refresh } = usePolling(
+const { data: boot, error: bootError, start, refresh } = usePolling(
     () => api.get('/bootstrap'),
     { interval: 2500, immediate: false },
 )
@@ -95,12 +97,22 @@ async function join() {
 </script>
 
 <template>
-    <div class="min-h-dvh flex flex-col items-center p-5 gap-5">
-        <header class="text-center pt-4">
-            <h1 class="text-3xl font-black bg-gradient-to-r from-indigo-300 via-fuchsia-300 to-amber-200 bg-clip-text text-transparent">
-                {{ event?.title ?? 'Live Consensus' }}
-            </h1>
-            <p class="text-slate-400 mt-1 text-sm">Vamos decidir juntos 🎯</p>
+    <!-- o primeiro /bootstrap ainda não voltou: marca em vez de tela vazia -->
+    <LoadingScreen
+        v-if="!boot"
+        :label="bootError ? 'Sem conexão — tentando de novo…' : 'Preparando a sala…'"
+    />
+
+    <div v-else class="min-h-dvh flex flex-col items-center p-5 gap-5">
+        <header class="flex flex-col items-center gap-3 pt-4">
+            <BrandLogo size="lg" stacked />
+            <p
+                v-if="event?.title"
+                class="text-center text-lg font-black bg-gradient-to-r from-indigo-300 via-fuchsia-300 to-amber-200 bg-clip-text text-transparent"
+            >
+                {{ event.title }}
+            </p>
+            <p class="text-slate-400 text-sm">Vamos decidir juntos 🎯</p>
         </header>
 
         <div class="w-full max-w-md rounded-3xl bg-slate-900/70 ring-1 ring-white/10 p-6 shadow-2xl backdrop-blur space-y-5">

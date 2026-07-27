@@ -39,6 +39,8 @@ Route::prefix('admin')->middleware('master')->group(function () {
     Route::post('/missions/assign', [AdminController::class, 'assignMissions']);
     Route::post('/missions/reveal', [AdminController::class, 'revealMissions']);
     Route::post('/missions/hide', [AdminController::class, 'hideMissions']);
+    Route::post('/answers/reveal', [AdminController::class, 'revealAnswers']);
+    Route::post('/answers/hide', [AdminController::class, 'hideAnswers']);
     Route::post('/next-phase', [AdminController::class, 'nextPhase']);
     Route::post('/bonus-round', [AdminController::class, 'bonusRound']);
     Route::post('/end', [AdminController::class, 'end']);

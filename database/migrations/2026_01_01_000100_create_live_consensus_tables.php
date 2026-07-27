@@ -13,7 +13,7 @@ return new class extends Migration
             $table->string('title');
             // draft | open | running | finished
             $table->string('status')->default('draft');
-            // 1 = individual (5 rodadas), 2 = consenso da mesa (1 rodada)
+            // 1 = individual, 2 = consenso da mesa — as mesmas 5 rodadas nas duas
             $table->unsignedTinyInteger('phase')->default(1);
             $table->unsignedTinyInteger('current_round')->default(1);
             $table->foreignId('current_question_id')->nullable();

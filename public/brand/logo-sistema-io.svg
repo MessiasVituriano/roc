@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 260" role="img" aria-label="Sistema IO — Inteligência em Ocupação">
+    <defs>
+        <radialGradient id="lockDot" cx="35%" cy="28%" r="78%">
+            <stop offset="0%" stop-color="#c8e04e" />
+            <stop offset="55%" stop-color="#8cc63f" />
+            <stop offset="100%" stop-color="#3f9a2a" />
+        </radialGradient>
+        <linearGradient id="lockStem" x1="0" y1="0" x2="0.4" y2="1">
+            <stop offset="0%" stop-color="#0b4c93" />
+            <stop offset="100%" stop-color="#1a7ec2" />
+        </linearGradient>
+        <linearGradient id="lockRing" x1="0.12" y1="0" x2="0.88" y2="1">
+            <stop offset="0%" stop-color="#0b4c93" />
+            <stop offset="40%" stop-color="#1b86c4" />
+            <stop offset="72%" stop-color="#3fa63c" />
+            <stop offset="100%" stop-color="#7ac143" />
+        </linearGradient>
+        <linearGradient id="lockWord" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#1a7ec2" />
+            <stop offset="100%" stop-color="#7ac143" />
+        </linearGradient>
+    </defs>
+
+    <g transform="translate(152 6)">
+        <circle cx="25" cy="20" r="19" fill="url(#lockDot)" />
+        <circle cx="68" cy="100" r="32" fill="none" stroke="url(#lockRing)" stroke-width="30" />
+        <rect x="10" y="46" width="30" height="101" rx="3" fill="url(#lockStem)" />
+    </g>
+
+    <text
+        x="210" y="205"
+        text-anchor="middle"
+        font-family="'Instrument Sans', 'Helvetica Neue', Arial, sans-serif"
+        font-size="46" font-weight="800" letter-spacing="1.5"
+        fill="url(#lockWord)"
+    >SISTEMA IO</text>
+    <text
+        x="210" y="240"
+        text-anchor="middle"
+        font-family="'Instrument Sans', 'Helvetica Neue', Arial, sans-serif"
+        font-size="20" font-weight="600" letter-spacing="7.5"
+        fill="#4faa2c"
+    >EM OCUPAÇÃO</text>
+</svg>
