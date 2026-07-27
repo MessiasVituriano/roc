@@ -16,6 +16,7 @@ RUN apk add --no-cache postgresql-dev icu-dev oniguruma-dev libzip-dev \
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 COPY docker/php/opcache.ini /usr/local/etc/php/conf.d/opcache.ini
 COPY docker/php/php.ini /usr/local/etc/php/conf.d/app.ini
+COPY docker/php/zzz-pool.conf /usr/local/etc/php-fpm.d/zzz-pool.conf
 COPY docker/php/entrypoint.sh /usr/local/bin/entrypoint
 RUN chmod +x /usr/local/bin/entrypoint
 

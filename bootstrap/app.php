@@ -23,6 +23,14 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->api(append: [
             AppVersionHeader::class,
         ]);
+
+        // Em produção o Caddy termina o TLS e conversa com o nginx em HTTP puro
+        // dentro da rede do compose. Sem confiar no proxy, o Laravel enxerga o
+        // request como http:// (gerando URL absoluta errada num site HTTPS) e
+        // registra o IP do container do proxy no lugar do IP de quem votou.
+        // O `*` é seguro aqui porque nginx e php-fpm não publicam porta: o
+        // único caminho até a aplicação é passando pelo Caddy.
+        $middleware->trustProxies(at: '*');
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

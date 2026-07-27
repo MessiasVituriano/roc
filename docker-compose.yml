@@ -14,15 +14,35 @@ services:
         volumes:
             - storage:/var/www/html/storage
 
+    # Sem `ports`: o nginx só é alcançável pela rede interna do compose, através
+    # do Caddy. É isso que torna o trustProxies(at: '*') do bootstrap/app.php
+    # seguro — não existe caminho até o php-fpm que pule o proxy.
     nginx:
         build:
             context: .
             target: web
         restart: unless-stopped
-        ports:
-            - '${APP_PORT:-80}:80'
         depends_on:
             - app
+
+    caddy:
+        image: caddy:2-alpine
+        restart: unless-stopped
+        ports:
+            - '80:80'
+            - '443:443'
+        environment:
+            # `:80` = HTTP puro. Ponha o domínio no .env e o Caddy emite e
+            # renova o certificado sozinho. Ver docker/caddy/Caddyfile.
+            APP_DOMAIN: ${APP_DOMAIN:-:80}
+        volumes:
+            - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+            # Os certificados vivem aqui. Sem este volume, cada `up` refaz a
+            # emissão e o Let's Encrypt tem limite semanal por domínio.
+            - caddy_data:/data
+            - caddy_config:/config
+        depends_on:
+            - nginx
 
     pgsql:
         image: postgres:18-alpine
@@ -42,3 +62,5 @@ services:
 volumes:
     pgdata:
     storage:
+    caddy_data:
+    caddy_config:
