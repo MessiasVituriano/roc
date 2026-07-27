@@ -115,6 +115,25 @@ e os 2 blocos de perguntas, e rodar de novo duplicaria tudo.
 
 Health check em `/up`. Logs: `docker compose logs -f app`.
 
+### Atualizando depois da primeira subida
+
+```bash
+./scripts/deploy.sh              # pull, build, troca os containers, verifica
+./scripts/deploy.sh --no-pull    # usa o código já no disco (rollback manual)
+./scripts/deploy.sh --force      # ignora a trava de evento ao vivo
+```
+
+O script recusa o deploy se o `.env` estiver incompleto (sem `APP_KEY`, fora de
+`production`, com `APP_DEBUG=true`) ou se houver **evento em andamento** —
+trocar os containers reinicia o php-fpm, e no meio de uma rodada isso derruba
+o cronômetro com a sala olhando para o telão. Antes de trocar qualquer coisa
+ele faz um dump do banco em `~/roc-backups`.
+
+Ele nunca roda `db:seed` nem `down -v`: o primeiro duplicaria evento, mesas e
+perguntas; o segundo apagaria o volume do Postgres. As migrations não estão
+lá porque o [entrypoint](docker/php/entrypoint.sh) já roda `migrate --force`
+em todo boot.
+
 ### Sobre o TLS
 
 `APP_DOMAIN` é a única chave: com um nome real o Caddy emite e renova o
