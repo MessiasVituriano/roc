@@ -127,14 +127,17 @@ class SeedDemoParticipants extends Command
                 EventTable::where('id', $table->id)->update(['representative_id' => $representative]);
             }
 
-            $option = $options[$index % $options->count()];
+            // a rodada final não tem alternativas: no ensaio, simula o que o
+            // facilitador lançaria à mão, variando pela régua da dinâmica
+            $option = $question->isManual() ? null : $options[$index % $options->count()];
+            $points = $option?->points ?? [150, 80, 0, -50][$index % 4];
 
             TableVote::firstOrCreate(
                 ['event_table_id' => $table->id, 'question_id' => $question->id],
                 [
-                    'option_id' => $option->id,
-                    'participant_id' => $representative,
-                    'points' => $option->points,
+                    'option_id' => $option?->id,
+                    'participant_id' => $option ? $representative : null,
+                    'points' => $points,
                 ],
             );
             $answers++;

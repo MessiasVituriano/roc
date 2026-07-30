@@ -21,11 +21,12 @@ use Illuminate\Support\Collection;
  *
  * 1. **Nada de resultado antes do clique do facilitador.** Durante a votação o
  *    telão vê só quantos votos chegaram, nunca a distribuição.
- * 2. **Nada de gabarito antes do fim do evento.** Como a Fase 2 repete as
- *    perguntas da Fase 1, revelar a melhor alternativa numa rodada entregaria a
- *    resposta da outra. A revelação de cada rodada mostra a *divergência* — a
- *    distribuição dos votos — e nada mais. Melhor alternativa, pontos e efeitos
- *    só saem do servidor quando já não dá para usá-los.
+ * 2. **Nada de gabarito antes do fecho.** A revelação de cada rodada mostra a
+ *    *divergência* — a distribuição dos votos — e nada mais. Pontuação é
+ *    gabarito com outro nome: numa mesa pequena, o total depois da rodada 1
+ *    identifica a alternativa certa por aritmética, e saber a régua da rodada 1
+ *    muda como a sala joga as rodadas seguintes. Melhor alternativa, pontos e
+ *    efeitos só saem do servidor no clique do fecho.
  */
 class EventStateService
 {
@@ -93,7 +94,7 @@ class EventStateService
                 'gender' => $participant->gender,
                 'avatar_seed' => $participant->avatar_seed,
                 'is_representative' => $table->representative_id === $participant->id,
-                'can_answer' => $this->canAnswer($event, $participant, $table),
+                'can_answer' => $this->canAnswer($event, $participant, $table, $question),
                 'has_voted' => $mine !== null,
                 'voted_option_id' => $mine?->option_id,
                 // Os pontos da própria escolha entregam o gabarito tão bem
@@ -210,6 +211,21 @@ class EventStateService
             $payload['phase_comparison'] = $this->scores->phaseComparison($event);
         }
 
+        // A rodada final: o facilitador precisa da lista de mesas o tempo todo
+        // (é onde ele lança os pontos); o telão só depois do clique que revela
+        // a rodada, ou no fecho.
+        $final = $event->finalQuestion();
+
+        if ($final && ($forMaster || ($revealed && $question?->id === $final->id) || $this->showsAnswerKey($event))) {
+            $payload['final_round'] = [
+                'question_id' => $final->id,
+                'label' => $final->label,
+                'title' => $final->title,
+                'context' => $final->context,
+                'scores' => $this->scores->finalRoundScores($event, $final),
+            ];
+        }
+
         // camada 2 — o viés por missão só vai ao telão na virada de fase, e os
         // acertos só junto com o gabarito (a virada acontece antes da Fase 2)
         if ($event->missions_revealed || $forMaster) {
@@ -312,6 +328,10 @@ class EventStateService
      */
     public function results(Question $question, bool $withAnswerKey = false): array
     {
+        if ($question->isManual()) {
+            return $this->manualResults($question);
+        }
+
         $counts = $question->isIndividual()
             ? ParticipantVote::where('question_id', $question->id)
                 ->selectRaw('option_id, count(*) as total')
@@ -345,6 +365,7 @@ class EventStateService
 
         return [
             'mode' => $question->mode,
+            'manual' => false,
             'unit' => $question->isIndividual() ? 'participants' : 'tables',
             'total_votes' => $total,
             'has_answer_key' => $withAnswerKey,
@@ -353,70 +374,80 @@ class EventStateService
     }
 
     /**
-     * O gabarito completo, liberado só no encerramento.
+     * A revelação da rodada final. Não há alternativas para distribuir: o que
+     * vai ao telão é a pontuação que o facilitador lançou para cada mesa,
+     * ordenada — aqui a leitura é o ranking, não a divergência.
+     */
+    protected function manualResults(Question $question): array
+    {
+        $scores = collect($this->scores->finalRoundScores($question->event, $question));
+
+        return [
+            'mode' => $question->mode,
+            'manual' => true,
+            'unit' => 'tables',
+            'total_votes' => $scores->where('scored', true)->count(),
+            // sem régua não há gabarito: a pontuação já é o resultado
+            'has_answer_key' => false,
+            'options' => [],
+            'tables' => $scores
+                ->sortByDesc(fn (array $row) => $row['points'] ?? PHP_INT_MIN)
+                ->values()
+                ->all(),
+        ];
+    }
+
+    /**
+     * O gabarito, liberado só no fecho.
      *
-     * As duas fases fazem as mesmas perguntas, então cada rodada aparece uma
-     * vez só, com as duas leituras lado a lado: quanta gente acertou sozinha na
-     * Fase 1 e quantas mesas acertaram juntas na Fase 2. Essa comparação é o
-     * que a dinâmica inteira existe para produzir.
+     * Cobre as cinco rodadas da Fase 1 — são as únicas com régua. A rodada
+     * final da Fase 2 é uma missão aberta, pontuada à mão, e por isso aparece
+     * no payload por outro caminho (`final_round`), como pontuação por mesa e
+     * não como alternativa certa.
      *
      * @return array<int, array<string, mixed>>
      */
     public function answerKey(Event $event): array
     {
-        $questions = $event->questions()->with('options')->where('is_bonus', false)->get();
-        $ids = $questions->pluck('id');
+        $questions = $event->questions()
+            ->with('options')
+            ->where('phase', 1)
+            ->where('is_bonus', false)
+            ->orderBy('round')
+            ->get();
 
-        $tally = fn (string $model) => $model::whereIn('question_id', $ids)
+        $byPerson = ParticipantVote::whereIn('question_id', $questions->pluck('id'))
             ->selectRaw('question_id, option_id, count(*) as total')
             ->groupBy('question_id', 'option_id')
             ->get()
             ->mapWithKeys(fn ($row) => ["{$row->question_id}:{$row->option_id}" => (int) $row->total]);
 
-        $byPerson = $tally(ParticipantVote::class);
-        $byTable = $tally(TableVote::class);
-
         return $questions
-            ->groupBy('round')
-            ->sortKeys()
-            ->map(function (Collection $round) use ($byPerson, $byTable) {
-                $one = $round->firstWhere('phase', 1) ?? $round->first();
-                $two = $round->firstWhere('phase', 2);
-                // as alternativas espelhadas casam pela ordem, não pelo id
-                $mirrors = $two?->options->keyBy('order') ?? collect();
-                $best = $one->bestOption();
+            ->map(function (Question $question) use ($byPerson) {
+                $best = $question->bestOption();
 
-                $options = $one->options->map(function ($option) use ($one, $two, $mirrors, $byPerson, $byTable, $best) {
-                    $mirror = $mirrors->get($option->order);
-
-                    return [
-                        'text' => $option->text,
-                        'effect' => $option->effect,
-                        'points' => $option->points,
-                        'color' => $option->color,
-                        'is_best' => $best !== null && $option->id === $best->id,
-                        'individual_votes' => $byPerson["{$one->id}:{$option->id}"] ?? 0,
-                        'table_votes' => $two && $mirror ? ($byTable["{$two->id}:{$mirror->id}"] ?? 0) : 0,
-                    ];
-                });
+                $options = $question->options->map(fn ($option) => [
+                    'text' => $option->text,
+                    'effect' => $option->effect,
+                    'points' => $option->points,
+                    'color' => $option->color,
+                    'is_best' => $best !== null && $option->id === $best->id,
+                    'individual_votes' => $byPerson["{$question->id}:{$option->id}"] ?? 0,
+                ]);
 
                 $people = $options->sum('individual_votes');
-                $tables = $options->sum('table_votes');
                 $winner = $options->firstWhere('is_best', true);
 
                 return [
-                    'round' => $one->round,
-                    'label' => $one->label,
-                    'title' => $one->title,
+                    'round' => $question->round,
+                    'label' => $question->label,
+                    'title' => $question->title,
                     'best_text' => $winner['text'] ?? null,
                     'best_effect' => $winner['effect'] ?? null,
                     'best_points' => $winner['points'] ?? null,
-                    // sozinho contra junto, na mesma pergunta
+                    // quanta gente escolheu sozinha a melhor decisão
                     'individual_accuracy' => $people > 0
                         ? (int) round(($winner['individual_votes'] ?? 0) / $people * 100)
-                        : null,
-                    'table_accuracy' => $tables > 0
-                        ? (int) round(($winner['table_votes'] ?? 0) / $tables * 100)
                         : null,
                     'options' => $options->sortByDesc('points')->values()->all(),
                 ];
@@ -442,6 +473,8 @@ class EventStateService
             'context' => $question->context,
             'duration' => $question->duration,
             'is_bonus' => $question->is_bonus,
+            // a rodada final: sem alternativas, pontuada pelo facilitador
+            'manual_scoring' => $question->isManual(),
             'options' => $question->options->map(fn ($o) => array_filter([
                 'id' => $o->id,
                 'text' => $o->text,
@@ -475,11 +508,24 @@ class EventStateService
     /**
      * Fase 1: todo mundo responde. Fase 2: só o representante da mesa — e
      * enquanto ninguém assumiu, qualquer um da mesa pode.
+     *
+     * A rodada final é a exceção: não há alternativa a registrar, a mesa
+     * discute e o facilitador lança a pontuação. Ninguém responde pelo celular.
      */
-    public function canAnswer(Event $event, Participant $participant, EventTable $table): bool
-    {
+    public function canAnswer(
+        Event $event,
+        Participant $participant,
+        EventTable $table,
+        ?Question $question = null,
+    ): bool {
         if ($event->isIndividualPhase()) {
             return true;
+        }
+
+        $question ??= $event->currentQuestion();
+
+        if ($question?->isManual()) {
+            return false;
         }
 
         return $table->representative_id === null

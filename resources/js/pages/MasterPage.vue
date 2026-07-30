@@ -66,6 +66,34 @@ const individual = computed(() => event.value?.phase_mode === 'individual')
 const revealed = computed(() => event.value?.round_status === 'revealed')
 const voting = computed(() => event.value?.round_status === 'voting')
 
+// --- rodada final --------------------------------------------------------
+// Sem alternativas, sem régua: a mesa decide livremente e o facilitador lança
+// a pontuação aqui. É o único placar do evento digitado à mão.
+const isFinalRound = computed(() => question.value?.manual_scoring === true)
+const finalScores = computed(() => state.value?.final_round?.scores ?? [])
+// enquanto o facilitador digita, o rascunho local manda — senão o polling de
+// 1s reescreveria o campo embaixo do dedo dele
+const scoreDraft = ref({})
+const RULER = [150, 80, 0, -50]
+
+async function saveScore(tableId, points) {
+    busy.value = `score-${tableId}`
+    actionError.value = ''
+
+    try {
+        state.value = await api.post('/admin/final-score', {
+            event_table_id: tableId,
+            points: points === '' || points === null ? null : Number(points),
+        })
+        // salvo: o servidor volta a ser a fonte do valor exibido
+        delete scoreDraft.value[tableId]
+    } catch (e) {
+        actionError.value = e.message
+    } finally {
+        busy.value = ''
+    }
+}
+
 // --- máquina de estados vista pelo painel -------------------------------
 // status: draft → open → running → finished · round_status: idle → voting → revealed
 const status = computed(() => event.value?.status ?? 'draft')
@@ -384,8 +412,9 @@ async function saveLayout() {
                         {{ event?.answers_revealed ? '🙈 Ocultar gabarito' : '🔓 Revelar gabarito + comparativo' }}
                     </button>
                     <p class="text-[11px] text-emerald-200/60 leading-snug">
-                        Abre a melhor decisão de cada rodada e o comparativo Fase 1 × Fase 2.
-                        Antes disso o telão só mostra distribuição — a Fase 2 repete as perguntas.
+                        Abre a melhor decisão de cada rodada da Fase 1, a pontuação da rodada
+                        final e o comparativo entre as duas. Antes disso o telão só mostra
+                        distribuição.
                     </p>
                 </div>
 
@@ -441,8 +470,17 @@ async function saveLayout() {
                     </div>
                     <p class="text-white font-bold mt-1.5">{{ question.title }}</p>
 
+                    <!-- rodada final: a missão no lugar do gabarito, porque não
+                         há alternativa nem régua a conferir -->
+                    <p
+                        v-if="isFinalRound"
+                        class="mt-2 rounded-xl bg-amber-500/10 ring-1 ring-amber-400/30 px-3 py-2 text-[11px] text-amber-100 leading-snug"
+                    >
+                        “{{ question.context }}”
+                    </p>
+
                     <!-- gabarito e viés: notas de condução, nunca vão ao telão -->
-                    <div class="mt-2 grid grid-cols-2 gap-1.5">
+                    <div v-else class="mt-2 grid grid-cols-2 gap-1.5">
                         <div
                             v-for="(option, i) in question.options" :key="option.id"
                             class="text-[11px] px-2 py-1 rounded-lg flex justify-between gap-2"
@@ -457,6 +495,65 @@ async function saveLayout() {
                     <p v-if="question.bias_note" class="mt-2 text-[11px] text-amber-300/80 italic leading-snug">
                         Viés: {{ question.bias_note }}
                     </p>
+                </div>
+
+                <!--
+                    LANÇAMENTO DA RODADA FINAL. A única pontuação do evento que
+                    não sai de uma alternativa: a mesa decide livremente e o
+                    facilitador atribui o valor. Os atalhos seguem a régua da
+                    dinâmica; o campo aceita qualquer número.
+                -->
+                <div
+                    v-if="isFinalRound"
+                    class="rounded-2xl bg-amber-500/10 ring-2 ring-amber-500/40 p-4 flex flex-col min-h-0 max-h-72"
+                >
+                    <div class="flex items-baseline gap-2 shrink-0">
+                        <p class="text-[10px] uppercase tracking-widest text-amber-300 font-black">
+                            Pontuação da rodada final
+                        </p>
+                        <p class="text-[10px] text-amber-200/60">
+                            {{ finalScores.filter((row) => row.scored).length }}/{{ finalScores.length }} mesas lançadas
+                            · Enter salva · ✕ apaga
+                        </p>
+                    </div>
+
+                    <div class="flex-1 min-h-0 overflow-y-auto mt-2 space-y-1 pr-1">
+                        <div
+                            v-for="row in finalScores"
+                            :key="row.table_id"
+                            class="flex items-center gap-2 rounded-xl px-2 py-1"
+                            :class="row.scored ? 'bg-emerald-500/10' : 'bg-slate-900/60'"
+                        >
+                            <span class="shrink-0">{{ row.icon }}</span>
+                            <span class="flex-1 min-w-0 truncate text-xs font-bold text-white">{{ row.name }}</span>
+
+                            <button
+                                v-for="value in RULER" :key="value"
+                                class="rounded-lg px-2 py-1 text-[10px] font-black tabular-nums transition shrink-0"
+                                :class="row.points === value
+                                    ? 'bg-amber-500 text-white'
+                                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'"
+                                :disabled="busy === `score-${row.table_id}`"
+                                @click="saveScore(row.table_id, value)"
+                            >
+                                {{ value > 0 ? '+' : '' }}{{ value }}
+                            </button>
+
+                            <input
+                                type="number"
+                                class="w-16 shrink-0 rounded-lg bg-slate-950 px-2 py-1 text-xs text-white text-right tabular-nums ring-1 ring-white/10 focus:ring-amber-400 outline-none"
+                                :value="scoreDraft[row.table_id] ?? row.points ?? ''"
+                                @input="scoreDraft[row.table_id] = $event.target.value"
+                                @keyup.enter="saveScore(row.table_id, scoreDraft[row.table_id] ?? '')"
+                                @blur="scoreDraft[row.table_id] !== undefined && saveScore(row.table_id, scoreDraft[row.table_id])"
+                            >
+                            <button
+                                class="shrink-0 text-slate-500 hover:text-rose-300 text-xs px-1"
+                                :disabled="!row.scored"
+                                @click="saveScore(row.table_id, null)"
+                            >✕</button>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="flex items-center gap-3">
@@ -546,7 +643,7 @@ async function saveLayout() {
                             <tr>
                                 <th class="text-left pb-2">Mesa</th>
                                 <th class="text-right pb-2" title="Acertos da mesa na Fase 1 (votos individuais dos membros)">✔ F1</th>
-                                <th class="text-right pb-2" title="Acertos da mesa na Fase 2 (decisões em consenso)">✔ F2</th>
+                                <th class="text-right pb-2" title="A rodada final não tem alternativa certa: é pontuada à mão">✔ F2</th>
                                 <th class="text-right pb-2">F1</th>
                                 <th class="text-right pb-2">F2</th>
                                 <th class="text-right pb-2">Total</th>
@@ -573,10 +670,14 @@ async function saveLayout() {
                                     class="text-right tabular-nums"
                                     :class="row.phase_two_accuracy > row.phase_one_accuracy ? 'text-emerald-400 font-bold' : 'text-slate-300'"
                                 >
-                                    {{ row.phase_two_correct }}/{{ row.phase_two_votes }}
-                                    <span v-if="row.phase_two_accuracy !== null" class="text-[10px] opacity-70 ml-0.5">
-                                        {{ row.phase_two_accuracy }}%
-                                    </span>
+                                    <!-- null = rodada sem régua (a final) -->
+                                    <template v-if="row.phase_two_correct !== null">
+                                        {{ row.phase_two_correct }}/{{ row.phase_two_votes }}
+                                        <span v-if="row.phase_two_accuracy !== null" class="text-[10px] opacity-70 ml-0.5">
+                                            {{ row.phase_two_accuracy }}%
+                                        </span>
+                                    </template>
+                                    <span v-else class="text-slate-600">—</span>
                                 </td>
                                 <td class="text-right tabular-nums text-slate-400">{{ row.phase_one_points }}</td>
                                 <td class="text-right tabular-nums text-slate-300">{{ row.phase_two_points }}</td>
@@ -689,8 +790,24 @@ async function saveLayout() {
                 <!-- resultado da rodada revelada, para o facilitador narrar -->
                 <div v-if="revealed && results" class="rounded-3xl bg-slate-900/70 ring-1 ring-white/10 p-4 space-y-1.5">
                     <p class="text-[10px] uppercase tracking-widest text-fuchsia-300 font-bold">Rodada revelada</p>
+
+                    <!-- a rodada final revela o placar, não a distribuição -->
+                    <template v-if="results.manual">
+                        <div
+                            v-for="(row, i) in results.tables.filter((t) => t.scored)" :key="row.table_id"
+                            class="flex items-center gap-2 text-xs"
+                        >
+                            <span class="text-slate-500 tabular-nums w-5">{{ i + 1 }}º</span>
+                            <span class="truncate flex-1 text-slate-300">{{ row.icon }} {{ row.name }}</span>
+                            <span class="tabular-nums font-black w-10 text-right text-white">{{ row.points }}</span>
+                        </div>
+                        <p v-if="!results.total_votes" class="text-xs text-slate-500 italic">
+                            Nenhuma mesa pontuada ainda.
+                        </p>
+                    </template>
+
                     <div
-                        v-for="option in results.options" :key="option.option_id"
+                        v-for="option in results.manual ? [] : results.options" :key="option.option_id"
                         class="flex items-center gap-2 text-xs"
                     >
                         <span class="truncate flex-1 text-slate-300">{{ option.text }}</span>

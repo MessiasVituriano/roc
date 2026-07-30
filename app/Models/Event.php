@@ -86,6 +86,19 @@ class Event extends Model
             ->first();
     }
 
+    /**
+     * A rodada final da Fase 2: a que não tem alternativas e é pontuada mesa a
+     * mesa pelo facilitador.
+     */
+    public function finalQuestion(): ?Question
+    {
+        return $this->questions()
+            ->where('manual_scoring', true)
+            ->orderBy('phase')
+            ->orderBy('round')
+            ->first();
+    }
+
     public function roundsInPhase(?int $phase = null): int
     {
         return $this->questions()

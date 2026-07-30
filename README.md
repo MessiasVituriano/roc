@@ -7,16 +7,17 @@ Especificação de conteúdo e regras: [`docs/dinamica-roc.md`](docs/dinamica-ro
   Cada pessoa recebe uma **missão sorteada** e decide com ela.
 - **Virada de fase.** O placar **por grupo de missão** vai ao telão: mesma
   régua, missões diferentes, decisões diferentes.
-- **Fase 2 — mesa.** **As mesmas 5 perguntas da Fase 1**, agora decididas em
-  consenso e registradas pelo representante (~90s por rodada). Repetir o
-  cenário é o que torna a comparação honesta: muda uma variável só — decidir
-  sozinho contra decidir junto.
-- **O comparativo.** O fecho: o gabarito de cada rodada e o **Fase 1 × Fase 2**
-  lado a lado — acerto decidindo sozinho contra acerto decidindo em mesa, no
-  geral e rodada a rodada. É a prova numérica do objetivo da dinâmica.
+- **Fase 2 — a rodada final.** Uma rodada só, **sem alternativas**: todas as
+  mesas recebem a mesma missão final — a que funde as 4 missões da Fase 1 — e
+  decidem livremente por consenso (~5 min). A pontuação é **lançada mesa a mesa
+  pelo facilitador**, no painel.
+- **O comparativo.** O fecho: o gabarito das cinco rodadas da Fase 1, a
+  pontuação da rodada final por mesa e o **valor gerado por decisão** nos dois
+  formatos — sozinho contra em mesa.
 
-Cada alternativa vale pontos fixos (**+150 / +80 / 0 / −50**) e nada disso
-aparece antes do **clique do facilitador**.
+Nas cinco rodadas da Fase 1 cada alternativa vale pontos fixos
+(**+150 / +80 / 0 / −50**) e nada disso aparece antes do **clique do
+facilitador**. A rodada final não tem régua: quem pontua é o facilitador.
 
 | Tela | URL |
 |---|---|
@@ -177,8 +178,8 @@ Numa VPS de 2 GB, baixe para 16: ainda é bem mais que o pico real.
 | 4 | **📊 REVELAR no telão** | a distribuição dos votos vai ao telão (sem gabarito) |
 | 5 | **⏭ Próxima rodada** | carrega a rodada seguinte |
 | 6 | **🎭 Revelar placar por missão** | a virada de fase |
-| 7 | **➡ Ir para a Fase 2** | as mesmas 5 rodadas, agora em consenso de mesa |
-| 8 | **🔓 Revelar gabarito + comparativo** | **o fecho:** gabarito de cada rodada e Fase 1 × Fase 2 no telão |
+| 7 | **➡ Ir para a Fase 2** | carrega a rodada final; a pontuação é lançada mesa a mesa no painel |
+| 8 | **🔓 Revelar gabarito + comparativo** | **o fecho:** gabarito da Fase 1 e a rodada final no telão |
 | 9 | **🎲 Rodada de desempate** | só se o empate sobreviver aos 3 primeiros critérios |
 | 10 | **🏁 Finalizar evento** | telão mostra a mesa vencedora |
 
@@ -199,10 +200,9 @@ de emergência.
   **🔓 Revelar gabarito + comparativo** (ou quando o evento é encerrado) — e no
   `/api/admin/overview`, que nunca é projetado.
 
-  A segunda camada existe porque a Fase 2 repete as perguntas da Fase 1:
-  revelar a melhor decisão numa rodada entregaria a resposta da outra. E o
-  gabarito vaza por mais caminhos do que parece — todos fechados e cobertos por
-  teste:
+  A segunda camada existe porque saber a régua da rodada 1 muda como a sala
+  joga as quatro seguintes. E o gabarito vaza por mais caminhos do que parece —
+  todos fechados e cobertos por teste:
 
   | Caminho | Por que entrega |
   |---|---|
@@ -221,10 +221,13 @@ de emergência.
   o placar já formado.
 - **Voto único garantido pelo banco**: índice único `(participant_id,
   question_id)` na Fase 1 e `(event_table_id, question_id)` na Fase 2.
-- **Missões distribuídas de forma circular**, não por sorteio puro: com 4
-  missões e ~150 pessoas, o aleatório puro deixaria grupos de tamanhos bem
-  diferentes e o placar por missão ficaria difícil de comparar. Quem chega
-  atrasado entra no menor grupo.
+- **Missões em rodízio dentro de cada mesa**, não por sorteio puro. Numa mesa de
+  10, os 4 primeiros recebem missões diferentes, os 4 seguintes repetem o ciclo
+  e a sobra de 2 pega duas quaisquer — sempre em ordem sorteada. É dentro da
+  mesa que a Fase 2 acontece: uma mesa inteira com a mesma missão não teria
+  conflito para resolver. Quando duas missões estão igualmente ausentes da mesa,
+  a sobra vai para a que tem menos gente **no evento inteiro**, para o placar por
+  missão continuar comparável. Quem chega atrasado entra pelo mesmo critério.
 - **O placar por missão compara médias por voto**, não somas — senão o grupo
   maior venceria por tamanho, não por decisão.
 - **Cronômetro no servidor.** Zerou, os votos são recusados mesmo antes de o
@@ -239,10 +242,13 @@ de emergência.
 3. maior **evolução Fase 1 → Fase 2**
 4. **rodada de desempate ao vivo**
 
-A evolução compara a média de pontos **por rodada**: quanto a decisão conjunta
+A evolução compara a média de pontos **por decisão**: quanto a rodada final
 rendeu frente ao que os membros vinham rendendo sozinhos. O painel marca em
 vermelho quem chegou ao nível 4 ainda empatado com a liderança — é o gatilho
 para o facilitador rodar a pergunta bônus.
+
+A rodada final não tem alternativa certa, então a coluna de acertos da Fase 2
+aparece como `—`: os pontos dela somam no placar, mas nunca contam como acerto.
 
 ### Estados da mesa
 
@@ -251,7 +257,7 @@ para o facilitador rodar a pergunta bônus.
 | Cinza | `idle` | fase não iniciada |
 | Azul | `discussing` | respondendo |
 | Amarelo | `warning` | último quarto do tempo |
-| Verde | `done` | bloco completo (todos da mesa na Fase 1, a mesa na Fase 2) |
+| Verde | `done` | bloco completo (todos da mesa na Fase 1, a mesa pontuada na Fase 2) |
 | Vermelho | `offline` | ninguém da mesa conectado |
 
 ## API
@@ -269,6 +275,7 @@ para o facilitador rodar a pergunta bônus.
 | `POST` | `/api/admin/{open,start,close,reveal,next,end}` | controle da rodada |
 | `POST` | `/api/admin/missions/{assign,reveal,hide}` | sorteio e virada de fase |
 | `POST` | `/api/admin/{next-phase,bonus-round}` | fase 2 e desempate |
+| `POST` | `/api/admin/final-score` | lança a pontuação da rodada final de uma mesa (`points: null` apaga) |
 | `POST` | `/api/admin/{add-time,reset-round,layout}` | tempo extra, reset e layout |
 | `POST` | `/api/admin/tables/{id}/representative` | designa o representante da mesa |
 | `GET/POST/PATCH/DELETE` | `/api/admin/tables/…` | CRUD das mesas |
@@ -298,10 +305,11 @@ php artisan test
 ```
 
 Cobrem o sigilo do gabarito até o encerramento (por todos os caminhos da tabela
-acima), a contagem de acertos nas duas fases, o congelamento dos pontos no voto,
-a distribuição equilibrada das missões, o placar por missão revelando o viés, o
-travamento do representante na Fase 2, o critério de vitória em 4 níveis com a
-detecção de empate na liderança, e a travessia das 5 rodadas até a Fase 2.
+acima), a contagem de acertos, o congelamento dos pontos no voto, a distribuição
+equilibrada das missões, o placar por missão revelando o viés, o travamento do
+representante na rodada de desempate, o critério de vitória em 4 níveis com a
+detecção de empate na liderança, e a rodada final: celular sem alternativa,
+pontuação lançada, corrigida e apagada pelo painel.
 
 ## Conteúdo do evento
 
@@ -309,14 +317,13 @@ Missões, rodadas, alternativas e pontos ficam em
 `database/seeders/LiveConsensusSeeder.php`. Trocar o conteúdo é editar esse
 arquivo — nada no código depende do texto.
 
-O seeder descreve **só a Fase 1**. A Fase 2 é gerada a partir dela por
-`mirrorPhaseTwo()`: mesmo título, mesmo cenário, mesmas alternativas e mesma
-régua, trocando `mode` para `consensus` e a duração para
-`LiveConsensusSeeder::CONSENSUS_DURATION`. Editar um cenário muda as duas fases
-de uma vez — não há texto duplicado para sair de sincronia.
+As cinco rodadas da Fase 1 têm alternativas e régua. A **rodada final** (Fase 2,
+rodada 1) tem `manual_scoring => true` e `options => []`: o texto da missão vive
+em `context`, a duração em `LiveConsensusSeeder::FINAL_ROUND_DURATION` e a
+pontuação entra pelo painel, mesa a mesa.
 
 > ⚠️ **Pendente:** a apresentação não define a **pergunta bônus de desempate**.
-> Ela está no seeder como `[PREENCHER]` (Fase 2, rodada 6, `is_bonus`), com a
+> Ela está no seeder como `[PREENCHER]` (Fase 2, rodada 2, `is_bonus`), com a
 > mecânica pronta e a régua de pontos já aplicada.
 
 ## Estendendo

@@ -123,6 +123,50 @@ class AdminController extends Controller
         }
     }
 
+    /**
+     * A pontuação da rodada final, lançada mesa a mesa.
+     *
+     * A rodada final não tem alternativas — a mesa decide livremente e quem
+     * pontua é o facilitador. A linha entra em `table_votes` sem `option_id`,
+     * então soma no placar da Fase 2 como qualquer outra decisão de mesa, mas
+     * nunca conta como acerto: não havia régua para acertar.
+     *
+     * `points: null` apaga o lançamento, para corrigir um valor digitado errado.
+     */
+    public function finalScore(Request $request): JsonResponse
+    {
+        $event = $this->requireEvent();
+        $question = $event->finalQuestion();
+
+        abort_if(! $question, 409, 'Este evento não tem rodada final cadastrada.');
+
+        $data = $request->validate([
+            'event_table_id' => ['required', Rule::exists('event_tables', 'id')->where('event_id', $event->id)],
+            'points' => ['present', 'nullable', 'integer', 'min:-1000', 'max:1000'],
+        ]);
+
+        $target = TableVote::where('question_id', $question->id)
+            ->where('event_table_id', $data['event_table_id']);
+
+        if ($data['points'] === null) {
+            $target->delete();
+        } else {
+            TableVote::updateOrCreate(
+                [
+                    'question_id' => $question->id,
+                    'event_table_id' => $data['event_table_id'],
+                ],
+                [
+                    'option_id' => null,
+                    'participant_id' => null,
+                    'points' => $data['points'],
+                ],
+            );
+        }
+
+        return $this->respond($event->refresh());
+    }
+
     /** Sorteia (ou re-sorteia) as missões da Fase 1. */
     public function assignMissions(Request $request): JsonResponse
     {
