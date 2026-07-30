@@ -21,6 +21,7 @@ class Question extends Model
             'round' => 'integer',
             'duration' => 'integer',
             'is_bonus' => 'boolean',
+            'manual_scoring' => 'boolean',
         ];
     }
 
@@ -47,6 +48,15 @@ class Question extends Model
     public function isIndividual(): bool
     {
         return $this->mode === self::MODE_INDIVIDUAL;
+    }
+
+    /**
+     * A rodada final: sem alternativas, a mesa decide livre e o facilitador
+     * lança a pontuação mesa a mesa. Não há régua, logo não há acerto a contar.
+     */
+    public function isManual(): bool
+    {
+        return (bool) $this->manual_scoring;
     }
 
     /** A alternativa que a dinâmica considera a melhor decisão para o hotel. */

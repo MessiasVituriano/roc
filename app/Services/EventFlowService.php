@@ -5,6 +5,9 @@ namespace App\Services;
 use App\Models\Event;
 use App\Models\Mission;
 use App\Models\Participant;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Relations\Relation;
+use Illuminate\Support\Collection;
 use RuntimeException;
 
 /**
@@ -12,8 +15,9 @@ use RuntimeException;
  * método aqui.
  *
  * Roteiro: Fase 1 com 5 rodadas individuais (~20s de voto + revelação a cada
- * rodada), virada de fase revelando o placar por grupo de missão, e Fase 2
- * repetindo as mesmas 5 perguntas, agora decididas em consenso pela mesa.
+ * rodada), virada de fase revelando o placar por grupo de missão, e Fase 2 com
+ * a rodada final — uma missão só, decidida em consenso pela mesa e pontuada
+ * mesa a mesa pelo facilitador.
  */
 class EventFlowService
 {
@@ -30,9 +34,13 @@ class EventFlowService
     }
 
     /**
-     * Sorteia as missões da Fase 1. Distribuição circular em vez de aleatória
-     * pura: com 4 missões e ~150 pessoas, o sorteio puro deixaria grupos de
-     * tamanhos bem diferentes e o placar por missão ficaria difícil de ler.
+     * Sorteia as missões da Fase 1 — **por mesa**, não pela sala.
+     *
+     * Cada mesa recebe as 4 missões em rodízio: os 4 primeiros integrantes
+     * pegam missões diferentes, os 4 seguintes repetem o ciclo, e uma sobra de
+     * 2 pega 2 quaisquer. Quem senta na mesa é que precisa estar dividido — é
+     * dentro dela que a conversa da Fase 2 acontece, e uma mesa inteira com a
+     * mesma missão não teria conflito nenhum para resolver.
      *
      * @return int quantas pessoas receberam missão agora
      */
@@ -44,27 +52,43 @@ class EventFlowService
             throw new RuntimeException('Nenhuma missão cadastrada para este evento.');
         }
 
-        $query = $event->participants()->orderBy('id');
-
-        if (! $reassign) {
-            $query->whereNull('mission_id');
+        if ($reassign) {
+            $event->participants()->update(['mission_id' => null]);
         }
 
-        $people = $query->get();
-        // continua a rodar a partir de onde a distribuição parou, para quem
-        // chega atrasado não desequilibrar os grupos
-        $offset = $reassign ? 0 : $event->participants()->whereNotNull('mission_id')->count();
+        $pending = $event->participants()
+            ->whereNull('mission_id')
+            ->orderBy('id')
+            ->get()
+            ->groupBy('event_table_id');
 
-        foreach ($people as $index => $person) {
-            $person->forceFill([
-                'mission_id' => $missions[($offset + $index) % $missions->count()]->id,
-            ])->saveQuietly();
+        if ($pending->isEmpty()) {
+            return 0;
         }
 
-        return $people->count();
+        $global = $this->missionCounts($event->participants());
+        $assigned = 0;
+
+        foreach ($pending as $tableId => $people) {
+            $table = $this->missionCounts(Participant::where('event_table_id', $tableId));
+
+            // sorteia a ordem dos integrantes: sem isso, quem entra primeiro na
+            // mesa sempre recebe a mesma missão, e o padrão fica visível na sala
+            foreach ($people->shuffle() as $person) {
+                $mission = $this->pickMission($missions, $table, $global);
+
+                $person->forceFill(['mission_id' => $mission->id])->saveQuietly();
+
+                $table[$mission->id] = ($table[$mission->id] ?? 0) + 1;
+                $global[$mission->id] = ($global[$mission->id] ?? 0) + 1;
+                $assigned++;
+            }
+        }
+
+        return $assigned;
     }
 
-    /** Garante missão para quem entrou depois do sorteio. */
+    /** Garante missão para quem entrou depois do sorteio, na mesa dele. */
     public function assignMissionTo(Event $event, Participant $participant): ?Mission
     {
         if ($participant->mission_id) {
@@ -77,24 +101,65 @@ class EventFlowService
             return null;
         }
 
-        // entra no menor grupo, mantendo o equilíbrio
-        $counts = $event->participants()
-            ->whereNotNull('mission_id')
-            ->selectRaw('mission_id, count(*) as total')
-            ->groupBy('mission_id')
-            ->pluck('total', 'mission_id');
-
-        $mission = $missions->sortBy(fn (Mission $m) => (int) ($counts[$m->id] ?? 0))->first();
+        $mission = $this->pickMission(
+            $missions,
+            $this->missionCounts(Participant::where('event_table_id', $participant->event_table_id)),
+            $this->missionCounts($event->participants()),
+        );
 
         $participant->forceFill(['mission_id' => $mission->id])->saveQuietly();
 
         return $mission;
     }
 
+    /**
+     * A missão de uma pessoa: a menos representada **na mesa dela**.
+     *
+     * O rodízio sai daqui: com a mesa zerada as quatro empatam e o sorteio
+     * decide; depois disso a que já saiu tem contagem maior e fica para o ciclo
+     * seguinte. O placar da sala entra só como desempate — quando duas missões
+     * estão igualmente ausentes da mesa, a sobra vai para a que tem menos gente
+     * no evento inteiro, para o placar por missão continuar comparável.
+     *
+     * @param  Collection<int, Mission>  $missions
+     * @param  array<int, int>  $table
+     * @param  array<int, int>  $global
+     */
+    protected function pickMission(Collection $missions, array $table, array $global): Mission
+    {
+        return $missions
+            // embaralhar antes de ordenar é o que sorteia os empates: o sort do
+            // PHP é estável, então a ordem aleatória sobrevive ao critério
+            ->shuffle()
+            ->sortBy(fn (Mission $m) => [$table[$m->id] ?? 0, $global[$m->id] ?? 0])
+            ->first();
+    }
+
+    /**
+     * Quantas pessoas já carregam cada missão, dentro do recorte consultado.
+     *
+     * @return array<int, int>
+     */
+    protected function missionCounts(Builder|Relation $query): array
+    {
+        return $query->whereNotNull('mission_id')
+            ->selectRaw('mission_id, count(*) as total')
+            ->groupBy('mission_id')
+            ->pluck('total', 'mission_id')
+            ->map(fn ($total) => (int) $total)
+            ->all();
+    }
+
     /** Abre a votação da rodada atual. */
     public function startRound(Event $event, ?int $duration = null): Event
     {
-        $question = $event->questionFor($event->phase, $event->current_round);
+        // O desempate fica fora da contagem normal de rodadas, mas depois que o
+        // painel o carrega ele *é* a rodada corrente — e precisa poder abrir.
+        $question = $event->questionFor(
+            $event->phase,
+            $event->current_round,
+            includeBonus: (bool) $event->currentQuestion()?->is_bonus,
+        );
 
         if (! $question) {
             throw new RuntimeException('Nenhuma pergunta cadastrada para esta rodada.');
@@ -217,7 +282,7 @@ class EventFlowService
         return $event->refresh();
     }
 
-    /** Passa para a Fase 2, ou encerra se já estiver nela. */
+    /** Passa para a Fase 2 (a rodada final), ou encerra se já estiver nela. */
     public function nextPhase(Event $event): Event
     {
         if ($event->phase >= Event::LAST_PHASE) {

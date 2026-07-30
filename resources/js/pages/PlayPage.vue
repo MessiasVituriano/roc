@@ -31,6 +31,16 @@ const hasVoted = computed(() => me.value?.has_voted ?? false)
 const canAnswer = computed(() => me.value?.can_answer ?? false)
 const needsRepresentative = computed(() => !individual.value && !table.value?.representative_id)
 
+// A rodada final não tem alternativas: a mesa decide livremente e o facilitador
+// lança a pontuação. O celular vira o cartão da missão, e nada mais.
+const finalRound = computed(() => question.value?.manual_scoring === true)
+const finalScores = computed(() => results.value?.tables ?? [])
+const myScore = computed(() => {
+    const index = finalScores.value.findIndex((row) => row.table_id === table.value?.id)
+
+    return index < 0 ? null : { ...finalScores.value[index], position: index + 1 }
+})
+
 const myOption = computed(
     () => question.value?.options.find((o) => o.id === me.value?.voted_option_id) ?? null,
 )
@@ -48,6 +58,12 @@ const screen = computed(() => {
     if (event.value.status === 'finished') return 'finished'
     // cadastrado antes da abertura: sala de espera até o facilitador abrir
     if (event.value.status === 'draft') return 'lobby'
+    // a rodada final tem tela própria: sem alternativas, sem representante
+    if (finalRound.value) {
+        if (event.value.round_status === 'revealed') return 'final-score'
+        if (event.value.round_status === 'voting') return 'final-mission'
+        return 'waiting'
+    }
     if (event.value.round_status === 'revealed') return 'revealed'
     if (event.value.round_status === 'voting') {
         if (!event.value.voting_open) return 'waiting-reveal'
@@ -182,6 +198,62 @@ function leave() {
                             Fase {{ event?.phase }} · rodada {{ event?.round }} de {{ event?.total_rounds }}
                         </p>
                     </div>
+                </section>
+
+                <!--
+                    RODADA FINAL: uma missão só, igual para todas as mesas, sem
+                    alternativas. Não há o que registrar aqui — a mesa conversa
+                    e o facilitador lança a pontuação no painel.
+                -->
+                <section v-else-if="screen === 'final-mission'" key="final-mission" class="flex-1 flex flex-col gap-5">
+                    <div class="flex items-center gap-3">
+                        <CountdownTimer :remaining="timer.remaining" :duration="timer.duration" :size="64" />
+                        <div class="flex-1 min-w-0">
+                            <p class="text-[11px] font-bold uppercase tracking-widest text-amber-300">
+                                {{ question?.label }}
+                            </p>
+                            <p class="text-white font-black">Decidam juntos</p>
+                        </div>
+                    </div>
+
+                    <div class="rounded-3xl bg-gradient-to-br from-amber-500/15 to-fuchsia-500/10 ring-2 ring-amber-400/40 p-5 space-y-3">
+                        <p class="text-[10px] font-black uppercase tracking-[0.3em] text-amber-300">
+                            A missão da mesa
+                        </p>
+                        <p class="text-white font-bold text-lg leading-snug">“{{ question?.context }}”</p>
+                    </div>
+
+                    <p class="text-sm text-slate-400 leading-relaxed">
+                        As quatro missões da Fase 1 viraram uma só. Cheguem a uma posição de mesa —
+                        não há alternativa para marcar aqui: quem pontua esta rodada é o facilitador.
+                    </p>
+
+                    <p class="mt-auto rounded-2xl bg-slate-900/70 ring-1 ring-white/10 px-4 py-3 text-center text-xs text-slate-400">
+                        Olhe para o telão quando o tempo acabar.
+                    </p>
+                </section>
+
+                <!-- rodada final revelada: a pontuação lançada pelo facilitador -->
+                <section v-else-if="screen === 'final-score'" key="final-score" class="flex-1 flex flex-col justify-center gap-5 text-center">
+                    <div class="space-y-2">
+                        <div class="text-6xl">🤝</div>
+                        <h2 class="text-xl font-black text-white">Rodada final</h2>
+                    </div>
+
+                    <div v-if="myScore" class="rounded-3xl bg-slate-900/70 ring-1 ring-white/15 p-6">
+                        <p class="text-[11px] uppercase tracking-widest text-slate-400">
+                            {{ table?.icon }} {{ table?.name }}
+                        </p>
+                        <p class="text-5xl font-black text-amber-300 tabular-nums mt-1">
+                            {{ myScore.points }}<span class="text-slate-500 text-xl"> pts</span>
+                        </p>
+                        <p class="text-xs text-slate-500 mt-1">{{ myScore.position }}º na rodada final</p>
+                    </div>
+                    <p v-else class="text-slate-400 text-sm px-6">
+                        A pontuação da sua mesa ainda não foi lançada.
+                    </p>
+
+                    <p class="text-slate-500 text-sm">Olhe para o telão.</p>
                 </section>
 
                 <!-- fase 2 sem representante definido -->

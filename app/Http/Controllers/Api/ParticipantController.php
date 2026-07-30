@@ -154,6 +154,12 @@ class ParticipantController extends Controller
         $participant = $this->resolveParticipant($request);
         abort_if(! $participant, 401, 'Participante não identificado.');
         abort_if($event->isIndividualPhase(), 409, 'A fase atual é individual.');
+        // a rodada final não tem resposta a registrar — ninguém precisa assumir
+        abort_if(
+            (bool) $event->currentQuestion()?->isManual(),
+            409,
+            'A rodada final não tem resposta a registrar pela mesa.',
+        );
 
         $claimed = EventTable::where('id', $participant->event_table_id)
             ->whereNull('representative_id')
@@ -179,6 +185,11 @@ class ParticipantController extends Controller
 
         $question = $event->currentQuestion();
         abort_if(! $question, 409, 'Nenhuma rodada em andamento.');
+        abort_if(
+            $question->isManual(),
+            409,
+            'A rodada final não se registra pelo celular: a mesa decide e o facilitador pontua.',
+        );
 
         $data = $request->validate([
             'option_id' => ['required', Rule::exists('options', 'id')->where('question_id', $question->id)],
@@ -206,7 +217,7 @@ class ParticipantController extends Controller
             $table = $participant->table;
 
             abort_if(
-                ! $this->state->canAnswer($event, $participant, $table),
+                ! $this->state->canAnswer($event, $participant, $table, $question),
                 403,
                 'Apenas o representante da mesa responde nesta fase.',
             );

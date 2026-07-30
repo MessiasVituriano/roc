@@ -42,6 +42,8 @@ Route::prefix('admin')->middleware('master')->group(function () {
     Route::post('/answers/reveal', [AdminController::class, 'revealAnswers']);
     Route::post('/answers/hide', [AdminController::class, 'hideAnswers']);
     Route::post('/next-phase', [AdminController::class, 'nextPhase']);
+    // a rodada final é pontuada à mão, mesa a mesa
+    Route::post('/final-score', [AdminController::class, 'finalScore']);
     Route::post('/bonus-round', [AdminController::class, 'bonusRound']);
     Route::post('/end', [AdminController::class, 'end']);
 

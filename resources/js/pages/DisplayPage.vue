@@ -26,6 +26,15 @@ const tableRanking = computed(() => state.value?.table_ranking ?? [])
 const individual = computed(() => event.value?.phase_mode === 'individual')
 const unitLabel = computed(() => (progress.value.unit === 'participants' ? 'votos' : 'mesas'))
 
+// a rodada final: uma missão só, sem alternativas, pontuada pelo facilitador
+const isFinalRound = computed(() => question.value?.manual_scoring === true)
+const finalRound = computed(() => state.value?.final_round ?? null)
+const finalScores = computed(() =>
+    (finalRound.value?.scores ?? [])
+        .filter((row) => row.scored)
+        .sort((a, b) => b.points - a.points),
+)
+
 const view = computed(() => {
     if (!event.value) return 'lobby'
     if (event.value.status === 'finished') return 'final'
@@ -98,28 +107,20 @@ const barColor = (option, i) => option.color ?? NEUTRAL_BARS[i % NEUTRAL_BARS.le
 const answerKey = computed(() => state.value?.answer_key ?? [])
 const comparison = computed(() => state.value?.phase_comparison ?? null)
 
-// a tese da dinâmica em dois números, calculados no servidor sobre todos os
-// votos das duas fases
-const accuracy = computed(() => {
+// O fecho em números. A Fase 1 tem régua e por isso tem acerto; a rodada final
+// é uma missão aberta, pontuada à mão — o que compara as duas é valor gerado
+// por decisão.
+const closing = computed(() => {
     if (!comparison.value) return null
 
     return {
-        individual: comparison.value.individual.accuracy,
-        table: comparison.value.table.accuracy,
-        delta: comparison.value.accuracy_delta,
+        accuracy: comparison.value.individual.accuracy,
+        individual: comparison.value.individual.average,
+        table: comparison.value.table.average,
+        delta: comparison.value.average_delta,
         won: comparison.value.consensus_won,
     }
 })
-
-// escala as duas barras de cada rodada pela mesma régua (0–100%)
-const comparisonRows = computed(() =>
-    answerKey.value.map((row) => ({
-        ...row,
-        delta: row.individual_accuracy !== null && row.table_accuracy !== null
-            ? row.table_accuracy - row.individual_accuracy
-            : null,
-    })),
-)
 </script>
 
 <template>
@@ -182,93 +183,109 @@ const comparisonRows = computed(() =>
             </main>
 
             <!--
-                O COMPARATIVO — o fecho da dinâmica. As duas fases fizeram as
-                mesmas perguntas, então a diferença de acerto isola uma variável
-                só: decidir sozinho contra decidir junto.
+                O COMPARATIVO — o fecho da dinâmica. A Fase 1 tem gabarito, a
+                rodada final não: o que se compara entre elas é valor gerado por
+                decisão, sozinho contra junto.
             -->
             <main v-else-if="view === 'comparison'" key="comparison" class="flex-1 grid place-items-center p-8 min-h-0">
                 <div class="w-full max-w-6xl flex flex-col gap-6 min-h-0">
                     <div class="text-center space-y-1">
                         <p class="text-sm font-bold uppercase tracking-[0.4em] text-emerald-300">O comparativo</p>
-                        <h2 class="text-4xl font-black text-white">Mesma pergunta, decisão diferente</h2>
+                        <h2 class="text-4xl font-black text-white">Sozinho e depois em mesa</h2>
                         <p class="text-slate-400">
-                            As cinco rodadas da Fase 2 foram as mesmas da Fase 1. Só mudou quem decidiu.
+                            Cinco decisões individuais, uma decisão de mesa. Só mudou quem decidiu.
                         </p>
                     </div>
 
-                    <!-- o número grande -->
-                    <div v-if="accuracy" class="grid grid-cols-[1fr_auto_1fr] gap-6 items-center">
+                    <!-- o número grande: valor gerado por decisão -->
+                    <div v-if="closing" class="grid grid-cols-[1fr_auto_1fr] gap-6 items-center">
                         <div class="rounded-3xl bg-slate-900/70 ring-1 ring-white/10 p-7 text-center">
                             <p class="text-xs font-bold uppercase tracking-widest text-sky-300">Decidindo sozinho</p>
-                            <p class="text-7xl font-black text-white tabular-nums mt-1">{{ accuracy.individual ?? '—' }}%</p>
-                            <p class="text-sm text-slate-500 mt-1">de acerto · Fase 1</p>
+                            <p class="text-7xl font-black text-white tabular-nums mt-1">{{ closing.individual }}</p>
+                            <p class="text-sm text-slate-500 mt-1">
+                                pts por decisão · Fase 1
+                                <span v-if="closing.accuracy !== null"> · ✔ {{ closing.accuracy }}% de acerto</span>
+                            </p>
                         </div>
 
                         <div class="text-center">
                             <p class="text-5xl text-slate-600">→</p>
                             <p
-                                v-if="accuracy.delta !== null"
                                 class="text-3xl font-black tabular-nums mt-1"
-                                :class="accuracy.delta > 0 ? 'text-emerald-300' : accuracy.delta < 0 ? 'text-rose-300' : 'text-slate-400'"
+                                :class="closing.delta > 0 ? 'text-emerald-300' : closing.delta < 0 ? 'text-rose-300' : 'text-slate-400'"
                             >
-                                {{ accuracy.delta > 0 ? '+' : '' }}{{ accuracy.delta }}pp
+                                {{ closing.delta > 0 ? '+' : '' }}{{ closing.delta }}
                             </p>
                         </div>
 
                         <div
                             class="rounded-3xl p-7 text-center ring-2"
-                            :class="accuracy.won ? 'bg-emerald-500/10 ring-emerald-400/60' : 'bg-slate-900/70 ring-white/10'"
+                            :class="closing.won ? 'bg-emerald-500/10 ring-emerald-400/60' : 'bg-slate-900/70 ring-white/10'"
                         >
                             <p class="text-xs font-bold uppercase tracking-widest text-emerald-300">Decidindo em mesa</p>
                             <p
                                 class="text-7xl font-black tabular-nums mt-1"
-                                :class="accuracy.won ? 'text-emerald-300' : 'text-white'"
+                                :class="closing.won ? 'text-emerald-300' : 'text-white'"
                             >
-                                {{ accuracy.table ?? '—' }}%
+                                {{ closing.table }}
                             </p>
-                            <p class="text-sm text-emerald-200/60 mt-1">de acerto · Fase 2</p>
+                            <p class="text-sm text-emerald-200/60 mt-1">pts por mesa · rodada final</p>
                         </div>
                     </div>
 
-                    <!-- rodada a rodada, as duas barras na mesma régua -->
-                    <div class="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1">
-                        <div
-                            v-for="row in comparisonRows"
-                            :key="row.round"
-                            class="rounded-2xl bg-slate-900/60 ring-1 ring-white/10 px-4 py-3 grid grid-cols-[minmax(0,20rem)_1fr_auto] gap-4 items-center"
-                        >
-                            <div class="min-w-0">
-                                <p class="text-[10px] font-black uppercase tracking-widest text-amber-300">
-                                    Rodada {{ row.round }} · {{ row.label }}
-                                </p>
-                                <p class="text-xs text-white font-bold truncate mt-0.5">✅ {{ row.best_text }}</p>
-                            </div>
+                    <div class="flex-1 grid grid-cols-[1fr_minmax(0,22rem)] gap-5 min-h-0">
+                        <!-- o gabarito, rodada a rodada -->
+                        <div class="min-h-0 overflow-y-auto space-y-2 pr-1">
+                            <div
+                                v-for="row in answerKey"
+                                :key="row.round"
+                                class="rounded-2xl bg-slate-900/60 ring-1 ring-white/10 px-4 py-3 grid grid-cols-[minmax(0,20rem)_1fr_auto] gap-4 items-center"
+                            >
+                                <div class="min-w-0">
+                                    <p class="text-[10px] font-black uppercase tracking-widest text-amber-300">
+                                        Rodada {{ row.round }} · {{ row.label }}
+                                    </p>
+                                    <p class="text-xs text-white font-bold truncate mt-0.5">✅ {{ row.best_text }}</p>
+                                </div>
 
-                            <div class="space-y-1.5">
                                 <div class="flex items-center gap-2">
                                     <span class="text-[9px] uppercase tracking-widest text-slate-500 w-14 shrink-0">sozinho</span>
                                     <div class="flex-1 h-3 rounded-full bg-slate-800 overflow-hidden">
                                         <div class="h-full rounded-full bg-sky-400/70" :style="{ width: (row.individual_accuracy ?? 0) + '%' }" />
                                     </div>
-                                    <span class="text-xs tabular-nums text-slate-300 w-9 text-right shrink-0">{{ row.individual_accuracy ?? '—' }}%</span>
                                 </div>
-                                <div class="flex items-center gap-2">
-                                    <span class="text-[9px] uppercase tracking-widest text-slate-500 w-14 shrink-0">em mesa</span>
-                                    <div class="flex-1 h-3 rounded-full bg-slate-800 overflow-hidden">
-                                        <div class="h-full rounded-full bg-emerald-400" :style="{ width: (row.table_accuracy ?? 0) + '%' }" />
-                                    </div>
-                                    <span class="text-xs tabular-nums text-emerald-300 font-bold w-9 text-right shrink-0">{{ row.table_accuracy ?? '—' }}%</span>
-                                </div>
-                            </div>
 
-                            <p
-                                v-if="row.delta !== null"
-                                class="text-xl font-black tabular-nums w-16 text-right"
-                                :class="row.delta > 0 ? 'text-emerald-300' : row.delta < 0 ? 'text-rose-300' : 'text-slate-500'"
-                            >
-                                {{ row.delta > 0 ? '+' : '' }}{{ row.delta }}
-                            </p>
+                                <p class="text-xl font-black tabular-nums w-16 text-right text-white">
+                                    {{ row.individual_accuracy ?? '—' }}%
+                                </p>
+                            </div>
                         </div>
+
+                        <!-- a rodada final: a pontuação que o facilitador lançou -->
+                        <section class="rounded-3xl bg-slate-900/60 ring-1 ring-white/10 p-4 flex flex-col min-h-0">
+                            <p class="text-[11px] font-black uppercase tracking-[0.3em] text-amber-300 shrink-0">
+                                A rodada final
+                            </p>
+                            <p class="text-[11px] text-slate-400 italic leading-snug mt-1 shrink-0">
+                                “{{ finalRound?.context }}”
+                            </p>
+                            <div class="flex-1 min-h-0 overflow-y-auto mt-3 space-y-1 pr-1">
+                                <div
+                                    v-for="(row, i) in finalScores"
+                                    :key="row.table_id"
+                                    class="flex items-center gap-2 text-sm rounded-xl px-2 py-1"
+                                    :class="i === 0 ? 'bg-amber-500/15 ring-1 ring-amber-400/40' : ''"
+                                >
+                                    <span class="w-6 text-right tabular-nums text-slate-500 shrink-0">{{ i + 1 }}º</span>
+                                    <span class="shrink-0">{{ row.icon }}</span>
+                                    <span class="flex-1 min-w-0 truncate text-slate-200 font-bold">{{ row.name }}</span>
+                                    <span class="tabular-nums font-black text-white shrink-0">{{ row.points }}</span>
+                                </div>
+                                <p v-if="!finalScores.length" class="text-sm text-slate-500 italic">
+                                    Nenhuma mesa pontuada.
+                                </p>
+                            </div>
+                        </section>
                     </div>
 
                     <p class="text-center text-lg text-slate-300 italic">
@@ -287,12 +304,31 @@ const comparisonRows = computed(() =>
                 <div class="w-full max-w-6xl space-y-6">
                     <div class="text-center space-y-1">
                         <p class="text-xs font-bold uppercase tracking-[0.4em] text-fuchsia-300">
-                            {{ question?.label }} · como a sala decidiu
+                            {{ question?.label }} · {{ results.manual ? 'a pontuação da rodada' : 'como a sala decidiu' }}
                         </p>
                         <h2 class="text-3xl font-black text-white">{{ question?.title }}</h2>
                     </div>
 
-                    <div class="space-y-3">
+                    <!-- rodada final: sem alternativas, o que se revela é o placar -->
+                    <div v-if="results.manual" class="grid grid-cols-2 gap-3">
+                        <div
+                            v-for="(row, i) in results.tables.filter((t) => t.scored)"
+                            :key="row.table_id"
+                            class="rounded-2xl p-4 ring-1 grid grid-cols-[auto_1fr_auto] gap-3 items-center"
+                            :class="i === 0 ? 'bg-amber-400/10 ring-2 ring-amber-400/60' : 'bg-slate-900/50 ring-white/10'"
+                        >
+                            <span class="text-slate-500 font-black tabular-nums">{{ i + 1 }}º</span>
+                            <p class="font-black text-white text-lg truncate">{{ row.icon }} {{ row.name }}</p>
+                            <p class="text-3xl font-black tabular-nums" :class="i === 0 ? 'text-amber-300' : 'text-white'">
+                                {{ row.points }}
+                            </p>
+                        </div>
+                        <p v-if="!results.total_votes" class="col-span-2 text-center text-slate-500 italic">
+                            Nenhuma mesa pontuada ainda.
+                        </p>
+                    </div>
+
+                    <div v-else class="space-y-3">
                         <div
                             v-for="(option, i) in results.options"
                             :key="option.option_id"
@@ -320,7 +356,11 @@ const comparisonRows = computed(() =>
                     </div>
 
                     <p class="text-center text-sm text-slate-500">
-                        Qual era a melhor decisão para o hotel? Só no placar final.
+                        {{
+                            results.manual
+                                ? 'Pontuação lançada pelo facilitador — a mesa decidiu livremente.'
+                                : 'Qual era a melhor decisão para o hotel? Só no placar final.'
+                        }}
                     </p>
                 </div>
             </main>
@@ -333,7 +373,9 @@ const comparisonRows = computed(() =>
                             {{ question?.label }}
                         </span>
                         <h2 class="text-2xl font-black text-white leading-snug">{{ question?.title }}</h2>
-                        <p v-if="question?.context" class="text-sm text-slate-400 leading-relaxed">
+                        <!-- na rodada final o cenário é a própria missão, e ela
+                             já ocupa o painel maior à direita -->
+                        <p v-if="question?.context && !isFinalRound" class="text-sm text-slate-400 leading-relaxed">
                             {{ question.context }}
                         </p>
                         <div class="grid place-items-center pt-2">
@@ -352,7 +394,24 @@ const comparisonRows = computed(() =>
 
                 <!-- as alternativas sem nenhuma pista de pontuação -->
                 <div class="flex flex-col gap-4 min-h-0">
-                    <div class="grid grid-cols-2 gap-3">
+                    <!--
+                        rodada final: não há alternativas. O que fica no telão é
+                        a missão que todas as mesas receberam.
+                    -->
+                    <div
+                        v-if="isFinalRound"
+                        class="rounded-3xl bg-gradient-to-br from-amber-500/15 to-fuchsia-500/10 ring-2 ring-amber-400/40 p-6 space-y-2"
+                    >
+                        <p class="text-[11px] font-black uppercase tracking-[0.3em] text-amber-300">
+                            A missão de todas as mesas
+                        </p>
+                        <p class="text-2xl font-black text-white leading-snug">“{{ question?.context }}”</p>
+                        <p class="text-sm text-slate-400">
+                            Sem alternativas: cada mesa decide livremente, e a pontuação é do facilitador.
+                        </p>
+                    </div>
+
+                    <div v-else class="grid grid-cols-2 gap-3">
                         <div
                             v-for="(option, i) in question?.options"
                             :key="option.id"
@@ -447,10 +506,12 @@ const comparisonRows = computed(() =>
                                 <p class="text-[9px] uppercase tracking-widest text-slate-500">sozinhos</p>
                             </div>
                             <div>
+                                <!-- a rodada final não tem acerto a contar: o
+                                     número dela é a pontuação do facilitador -->
                                 <p class="text-xl font-black text-emerald-300 tabular-nums">
-                                    ✔ {{ winner.phase_two_correct }}/{{ winner.phase_two_votes }}
+                                    {{ winner.phase_two_points }} pts
                                 </p>
-                                <p class="text-[9px] uppercase tracking-widest text-slate-500">em mesa</p>
+                                <p class="text-[9px] uppercase tracking-widest text-slate-500">rodada final</p>
                             </div>
                             <div class="ml-auto text-right">
                                 <BrandLogo size="sm" />

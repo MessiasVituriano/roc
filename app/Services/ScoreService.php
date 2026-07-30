@@ -8,6 +8,7 @@ use App\Models\Mission;
 use App\Models\Option;
 use App\Models\Participant;
 use App\Models\ParticipantVote;
+use App\Models\Question;
 use App\Models\TableVote;
 use Illuminate\Support\Collection;
 
@@ -74,6 +75,19 @@ class ScoreService
     }
 
     /**
+     * A rodada final não tem alternativas: o facilitador lança os pontos e a
+     * linha do voto fica sem `option_id`. Acerto só existe onde havia régua,
+     * então contar essas linhas como erro seria inventar um erro que ninguém
+     * cometeu — sem voto por alternativa, o número é `null`, não zero.
+     */
+    protected function scored(int $correct, int $optionVotes): array
+    {
+        return $optionVotes > 0
+            ? [$correct, $this->accuracy($correct, $optionVotes)]
+            : [null, null];
+    }
+
+    /**
      * Camada 1 — ranking individual, somando as rodadas da Fase 1.
      */
     public function individualRanking(Event $event, int $limit = 0): array
@@ -98,7 +112,8 @@ class ScoreService
             ->join('questions', 'questions.id', '=', 'table_votes.question_id')
             ->where('questions.event_id', $event->id)
             ->where('questions.phase', 2)
-            ->selectRaw('table_votes.event_table_id, sum(table_votes.points) as total, count(*) as votes')
+            // count(option_id) ignora nulos: é quantas decisões tinham régua
+            ->selectRaw('table_votes.event_table_id, sum(table_votes.points) as total, count(*) as votes, count(table_votes.option_id) as option_votes')
             ->groupBy('table_votes.event_table_id')
             ->get()
             ->keyBy('event_table_id');
@@ -116,8 +131,12 @@ class ScoreService
                 $mesa = $tablePhaseTwo->get($p->event_table_id);
                 $mesaPoints = (int) ($mesa->total ?? 0);
                 $mesaVotes = (int) ($mesa->votes ?? 0);
-                $mesaHits = (int) ($tableCorrect[$p->event_table_id] ?? 0);
                 $own = (int) ($row->total ?? 0);
+
+                [$mesaHits, $mesaAccuracy] = $this->scored(
+                    (int) ($tableCorrect[$p->event_table_id] ?? 0),
+                    (int) ($mesa->option_votes ?? 0),
+                );
 
                 return [
                     'participant_id' => $p->id,
@@ -139,7 +158,7 @@ class ScoreService
                     'table_points' => $mesaPoints,
                     'table_votes' => $mesaVotes,
                     'table_correct' => $mesaHits,
-                    'table_accuracy' => $this->accuracy($mesaHits, $mesaVotes),
+                    'table_accuracy' => $mesaAccuracy,
 
                     // a pessoa por inteiro: decidindo sozinha + decidindo junto
                     'combined_points' => $own + $mesaPoints,
@@ -218,8 +237,8 @@ class ScoreService
     }
 
     /**
-     * Camada 3 — total por mesa: soma dos membros na Fase 1 + decisão conjunta
-     * da Fase 2 + evolução. Já ordenada pelo critério de vitória.
+     * Camada 3 — total por mesa: soma dos membros na Fase 1 + a rodada final da
+     * Fase 2 + evolução. Já ordenada pelo critério de vitória.
      */
     public function tableRanking(Event $event): array
     {
@@ -236,7 +255,7 @@ class ScoreService
             ->join('questions', 'questions.id', '=', 'table_votes.question_id')
             ->where('questions.event_id', $event->id)
             ->where('questions.phase', 2)
-            ->selectRaw('table_votes.event_table_id, sum(table_votes.points) as total, count(*) as votes')
+            ->selectRaw('table_votes.event_table_id, sum(table_votes.points) as total, count(*) as votes, count(table_votes.option_id) as option_votes')
             ->groupBy('table_votes.event_table_id')
             ->get()
             ->keyBy('event_table_id');
@@ -260,7 +279,12 @@ class ScoreService
                 $twoPoints = (int) ($two->total ?? 0);
 
                 $oneHits = (int) ($oneCorrect[$table->id] ?? 0);
-                $twoHits = (int) ($twoCorrect[$table->id] ?? 0);
+
+                // a rodada final é pontuada à mão: sem alternativa não há acerto
+                [$twoHits, $twoAccuracy] = $this->scored(
+                    (int) ($twoCorrect[$table->id] ?? 0),
+                    (int) ($two->option_votes ?? 0),
+                );
 
                 // Evolução: quanto a decisão conjunta rendeu por rodada frente
                 // ao que os membros vinham rendendo por rodada sozinhos.
@@ -283,7 +307,7 @@ class ScoreService
                     'phase_two_average' => round($twoAverage, 1),
                     'phase_two_votes' => $twoVotes,
                     'phase_two_correct' => $twoHits,
-                    'phase_two_accuracy' => $this->accuracy($twoHits, $twoVotes),
+                    'phase_two_accuracy' => $twoAccuracy,
                     'total_points' => $onePoints + $twoPoints,
                     'evolution' => round($delta, 1),
                     // percentual sobre a régua máxima, para caber numa barra
@@ -335,10 +359,10 @@ class ScoreService
     /**
      * O comparativo entre as fases — a tese da dinâmica em números.
      *
-     * Só faz sentido porque as duas fases fazem as **mesmas perguntas**: a
-     * diferença de acerto entre elas isola uma variável só, decidir sozinho
-     * contra decidir junto. Se as perguntas fossem outras, este número não
-     * significaria nada.
+     * As duas fases não fazem a mesma pergunta: a Fase 1 são cinco escolhas com
+     * régua e a Fase 2 é uma missão aberta, pontuada pelo facilitador. Acerto em
+     * percentual, portanto, só existe do lado individual — o que dá para
+     * comparar entre as duas é **valor gerado por decisão** (`average_delta`).
      */
     public function phaseComparison(Event $event): array
     {
@@ -352,9 +376,39 @@ class ScoreService
             'table' => $table,
             'accuracy_delta' => $bothScored ? $table['accuracy'] - $individual['accuracy'] : null,
             'average_delta' => round($table['average'] - $individual['average'], 1),
-            // a tese se confirmou nesta sala?
-            'consensus_won' => $bothScored ? $table['accuracy'] > $individual['accuracy'] : null,
+            // a tese se confirmou nesta sala? enquanto houver acerto dos dois
+            // lados ele é o critério; com a rodada final à mão, sobram os pontos
+            'consensus_won' => match (true) {
+                $bothScored => $table['accuracy'] > $individual['accuracy'],
+                $table['votes'] > 0 && $individual['votes'] > 0 => $table['average'] > $individual['average'],
+                default => null,
+            },
         ];
+    }
+
+    /**
+     * A pontuação da rodada final, mesa a mesa. Em ordem de mesa, não de
+     * pontos: é a lista que o facilitador preenche no painel, e ela não pode
+     * reordenar embaixo do dedo dele a cada valor lançado.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function finalRoundScores(Event $event, Question $question): array
+    {
+        $scores = TableVote::where('question_id', $question->id)->pluck('points', 'event_table_id');
+
+        return $event->tables()
+            ->orderBy('id')
+            ->get()
+            ->map(fn (EventTable $table) => [
+                'table_id' => $table->id,
+                'name' => $table->name,
+                'icon' => $table->icon,
+                'color' => $table->color,
+                'points' => isset($scores[$table->id]) ? (int) $scores[$table->id] : null,
+                'scored' => isset($scores[$table->id]),
+            ])
+            ->all();
     }
 
     /** Votos, acertos e pontos de uma fase inteira. */
@@ -368,21 +422,23 @@ class ScoreService
             ->where('questions.phase', $phase);
 
         $row = $base()
-            ->selectRaw("count(*) as votes, coalesce(sum({$table}.points), 0) as points")
+            ->selectRaw("count(*) as votes, count({$table}.option_id) as option_votes, coalesce(sum({$table}.points), 0) as points")
             ->first();
 
         $votes = (int) ($row->votes ?? 0);
         $points = (int) ($row->points ?? 0);
         $best = $this->bestOptionIds($event);
 
-        $correct = $best->isEmpty()
+        $hits = $best->isEmpty()
             ? 0
             : $base()->whereIn("{$table}.option_id", $best->values())->count();
+
+        [$correct, $accuracy] = $this->scored($hits, (int) ($row->option_votes ?? 0));
 
         return [
             'votes' => $votes,
             'correct' => $correct,
-            'accuracy' => $this->accuracy($correct, $votes),
+            'accuracy' => $accuracy,
             'points' => $points,
             'average' => $votes > 0 ? round($points / $votes, 1) : 0.0,
         ];

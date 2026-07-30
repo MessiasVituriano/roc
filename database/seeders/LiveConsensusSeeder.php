@@ -7,24 +7,25 @@ use App\Models\Question;
 use Illuminate\Database\Seeder;
 
 /**
- * Conteúdo da dinâmica, transcrito de `docs/dinamica-roc.md`.
+ * Conteúdo da dinâmica, transcrito do PDF "Sala de Decisão ROC — Perguntas,
+ * Alternativas e Pontuação".
  *
- * A régua de pontos é fixa em toda a dinâmica: +150 (melhor decisão para o
- * hotel), +80, 0 e -50. Trocar o conteúdo do evento é editar este arquivo.
+ * A régua de pontos é fixa nas cinco rodadas da Fase 1: +150 (melhor decisão
+ * para o hotel), +80, 0 e -50. Trocar o conteúdo do evento é editar este
+ * arquivo.
  *
- * `rounds()` descreve **só a Fase 1**. A Fase 2 são as mesmas cinco perguntas,
- * agora decididas em consenso pela mesa — e por isso são espelhadas em código
- * (`mirrorPhaseTwo`), não copiadas aqui. Assim editar um cenário muda as duas
- * fases de uma vez, e a comparação Fase 1 → Fase 2 continua sendo maçã com maçã.
+ * A Fase 2 é **uma rodada só** e não tem alternativas: todas as mesas recebem a
+ * mesma missão final, decidem livremente por consenso e o facilitador lança a
+ * pontuação mesa a mesa pelo painel (`manual_scoring`).
  */
 class LiveConsensusSeeder extends Seeder
 {
     /**
-     * Tempo de votação de cada rodada da Fase 2. Bem maior que os 20s da Fase 1
-     * porque a mesa precisa discutir antes de registrar. O facilitador ainda
-     * sobrescreve rodada a rodada pelo painel.
+     * Tempo da rodada final. Bem maior que os 20s da Fase 1 porque a mesa
+     * precisa discutir a missão inteira antes de fechar uma posição. O
+     * facilitador ainda sobrescreve pelo painel.
      */
-    public const CONSENSUS_DURATION = 90;
+    public const FINAL_ROUND_DURATION = 300;
 
     protected array $missions = [
         ['diaria_media', 'Diária Média', 'Seu diretor financeiro pediu que você preservasse a diária média.', '💰', '#c9922e'],
@@ -93,6 +94,7 @@ class LiveConsensusSeeder extends Seeder
                 'bias_note' => $round['bias'] ?? null,
                 'duration' => $round['duration'],
                 'is_bonus' => $round['is_bonus'] ?? false,
+                'manual_scoring' => $round['manual_scoring'] ?? false,
             ]);
 
             foreach ($round['options'] as $order => [$text, $effect, $points]) {
@@ -106,54 +108,9 @@ class LiveConsensusSeeder extends Seeder
             }
         }
 
-        $this->mirrorPhaseTwo($event);
-
         $event->update([
             'current_question_id' => $event->questions()->where('phase', 1)->where('round', 1)->value('id'),
         ]);
-    }
-
-    /**
-     * Fase 2 = as mesmas perguntas da Fase 1, agora em consenso da mesa.
-     *
-     * Repetir a pergunta é o ponto da dinâmica: com o mesmo cenário e a mesma
-     * régua, a diferença de pontos entre as fases isola exatamente uma variável
-     * — decidir sozinho contra decidir junto. É isso que a coluna "evolução" do
-     * placar por mesa passa a medir.
-     */
-    protected function mirrorPhaseTwo(Event $event): void
-    {
-        $phaseOne = $event->questions()
-            ->with('options')
-            ->where('phase', 1)
-            ->where('is_bonus', false)
-            ->orderBy('round')
-            ->get();
-
-        foreach ($phaseOne as $question) {
-            $mirrored = $event->questions()->create([
-                'phase' => 2,
-                'round' => $question->round,
-                'mode' => Question::MODE_CONSENSUS,
-                'label' => $question->label,
-                'title' => $question->title,
-                'context' => $question->context,
-                // nota de condução: na Fase 2 o viés a observar não é mais o da
-                // missão, é o de quem cede primeiro na mesa
-                'bias_note' => trim(
-                    "Mesma pergunta da rodada {$question->round} da Fase 1 — compare a decisão da mesa "
-                    .'com o que essas pessoas votaram sozinhas. '.($question->bias_note ?? '')
-                ),
-                'duration' => self::CONSENSUS_DURATION,
-                'is_bonus' => false,
-            ]);
-
-            foreach ($question->options as $option) {
-                $mirrored->options()->create($option->only([
-                    'text', 'effect', 'points', 'color', 'order',
-                ]));
-            }
-        }
     }
 
     /** Verde para a melhor decisão, vermelho para a que destrói valor. */
@@ -204,7 +161,7 @@ class LiveConsensusSeeder extends Seeder
                 'bias' => 'Quem tem a missão Reservas Diretas tende à B ou C, pela visibilidade; quem tem a missão Diária Média ou Ocupação tende à D, olhando custo por reserva.',
                 'options' => [
                     ['Google Ads segmentado para o período', 'Captura quem já está pesquisando ativamente o destino. Não amplia a demanda para quem ainda não considerou viajar.', 80],
-                    ['Campanha em redes sociais com criativos de alta conversão', 'Alcança um público amplo e teoricamente qualificado. O ciclo médio de decisão desse público costuma ser mais longo que 48h.', -50],
+                    ['Busca de marca (branded search) reforçando o site oficial do hotel', 'Reforça a visibilidade para quem já pretende reservar direto. Não amplia a demanda para quem ainda não considerou o hotel — o problema atual é de alcance, não de marca.', -50],
                     ['Parceria com influenciadores de viagem regionais', 'Gera alta exposição de marca e associação positiva. O custo é fixo, independente de quantas reservas a campanha gerar de fato.', -50],
                     ['Campanha de e-mail/CRM para hóspedes anteriores', 'Atinge uma base menor, mas já convertida antes. Custo por contato mais baixo entre as opções, com ciclo de decisão mais curto.', 150],
                 ],
@@ -213,7 +170,7 @@ class LiveConsensusSeeder extends Seeder
                 'phase' => 1, 'round' => 4, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => 20,
                 'label' => 'NEGOCIAÇÃO DE GRUPOS',
                 'title' => 'Como você responde ao pedido do grupo de 60 quartos?',
-                'context' => 'Hotel de 220 apartamentos. Grupo de 60 quartos solicitado a R$ 520 (meta de diária média é R$ 650). Forecast individual indica 71% de ocupação na data — restam 64 quartos livres, com ritmo de reservas forte nos últimos 10 dias e diária média projetada de R$ 670 para a demanda individual remanescente.',
+                'context' => 'Hotel de 220 apartamentos. Grupo de 60 quartos solicitado a R$ 520 (meta de diária média é R$ 650). Forecast individual (reservas em carteira) indica 71% de ocupação na data — restam 64 quartos livres, com ritmo de reservas forte nos últimos 10 dias e diária média projetada de R$ 670 para a demanda individual remanescente.',
                 'bias' => 'Quem tem a missão Participação de Mercado ou Ocupação tende à A, fechando o grupo logo; quem tem a missão Diária Média tende à D, pensando em receita total.',
                 'options' => [
                     ['Aceitar tarifa integral', 'Garante o fechamento imediato do grupo. Desloca demanda individual que, pelo ritmo de reservas, tende a pagar tarifa mais alta na mesma data.', -50],
@@ -237,15 +194,33 @@ class LiveConsensusSeeder extends Seeder
             ],
 
             // ---------------------------------------------------------------
-            // As cinco rodadas da Fase 2 não aparecem aqui: são espelhadas da
-            // Fase 1 por `mirrorPhaseTwo()`, com `mode = consensus`.
+            // Fase 2 — a rodada final, e só ela.
             //
-            // O desempate fica na rodada 6 da Fase 2 — depois das cinco reais,
+            // Diferente das rodadas 1 a 5, não é uma escolha entre alternativas
+            // fixas: todas as mesas recebem a mesma missão final — a que funde
+            // as 4 missões individuais da Fase 1 num objetivo só — e decidem
+            // livremente por consenso. Sem alternativas não há régua a aplicar,
+            // então a pontuação é lançada mesa a mesa pelo facilitador
+            // (`manual_scoring`), no painel.
+            // ---------------------------------------------------------------
+            [
+                'phase' => 2, 'round' => 1, 'mode' => Question::MODE_CONSENSUS,
+                'duration' => self::FINAL_ROUND_DURATION,
+                'manual_scoring' => true,
+                'label' => 'RODADA FINAL',
+                'title' => 'A missão final da mesa',
+                'context' => 'Maximizar o resultado total do hotel — pensando ao mesmo tempo em diária média, ocupação, reservas diretas e participação de mercado, como o Comitê Comercial completo.',
+                'bias' => 'As quatro missões da Fase 1 se fundem em uma só. Observe quem defende a própria missão até o fim e quem cede primeiro — a pontuação desta rodada é sua, lançada mesa a mesa no painel.',
+                'options' => [],
+            ],
+
+            // ---------------------------------------------------------------
+            // O desempate fica na rodada 2 da Fase 2 — depois da rodada final,
             // e fora da contagem (`is_bonus`), então "próxima rodada" nunca cai
             // nele. Só o botão de desempate do painel o carrega.
             // ---------------------------------------------------------------
             [
-                'phase' => 2, 'round' => 6, 'mode' => Question::MODE_CONSENSUS, 'duration' => 60,
+                'phase' => 2, 'round' => 2, 'mode' => Question::MODE_CONSENSUS, 'duration' => 60,
                 'is_bonus' => true,
                 'label' => 'DESEMPATE',
                 'title' => '[PREENCHER] Pergunta bônus de desempate',
