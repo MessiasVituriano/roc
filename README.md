@@ -190,8 +190,10 @@ telão só muda quando ele clica. O passo 8 é separado do 10 de propósito:
 encerrar joga os celulares na tela de "obrigado", enquanto revelar o gabarito
 mantém a sala inteira olhando para o telão.
 
-`+10s` / `+30s` estendem a rodada, e *Zerar votos da rodada* existe como saída
-de emergência.
+`+10s` / `+30s` estendem a rodada. **🔄 Recarregar a rodada** é a saída de
+emergência: apaga os votos da rodada corrente e devolve o evento ao ponto de
+abrir a votação, sem encostar nas outras rodadas — para quando a pergunta subiu
+ao telão antes da hora ou a sala votou no meio de uma explicação.
 
 ## Regras de negócio
 

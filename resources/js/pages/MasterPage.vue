@@ -204,6 +204,21 @@ async function previousRound() {
     await action('previous', '/admin/previous')
 }
 
+/**
+ * Rodar a rodada atual de novo, do zero. Apaga voto — e voto apagado no meio
+ * do evento não volta —, então pergunta antes.
+ */
+async function reloadRound() {
+    const votes = progress.value.answered
+    const ok = window.confirm(
+        votes > 0
+            ? `Recarregar a rodada ${event.value?.round}?\n\nOs ${votes} votos já registrados nela serão apagados e a rodada volta para o ponto de abrir a votação. As outras rodadas não são afetadas.`
+            : `Recarregar a rodada ${event.value?.round}?\n\nEla volta para o ponto de abrir a votação.`,
+    )
+
+    if (ok) await action('reset', '/admin/reset-round')
+}
+
 // destrutivo: pede confirmação antes de apagar tudo e recomeçar do zero
 async function resetEvent() {
     const ok = window.confirm(
@@ -434,6 +449,20 @@ async function saveLayout() {
                         >
                             ↩ Reabrir votação (desfazer revelação)
                         </button>
+
+                        <!--
+                            Rodar esta rodada de novo, do zero. Fica aqui, com
+                            os outros controles de rodada, porque é onde o
+                            facilitador procura quando a rodada deu errado.
+                        -->
+                        <button
+                            class="w-full rounded-xl px-4 py-2 text-xs font-semibold text-slate-400 hover:text-rose-300 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                            :disabled="isDraft || busy === 'reset'"
+                            title="Apaga os votos desta rodada e volta para o ponto de abrir a votação"
+                            @click="reloadRound"
+                        >
+                            🔄 Recarregar a rodada (zera os votos)
+                        </button>
                     </template>
                 </div>
 
@@ -487,13 +516,6 @@ async function saveLayout() {
                     >
                         🏁 Finalizar evento
                     </button>
-                    <button
-                        class="w-full rounded-2xl px-4 py-2 text-xs font-semibold text-slate-400 hover:text-rose-300 transition"
-                        @click="action('reset', '/admin/reset-round')"
-                    >
-                        Zerar votos da rodada
-                    </button>
-
                     <div class="pt-2 mt-1 border-t border-white/10">
                         <button
                             class="w-full rounded-2xl px-4 py-3 text-sm font-black text-white bg-gradient-to-r from-rose-600 to-orange-600 hover:brightness-110 active:scale-95 transition disabled:opacity-50 disabled:cursor-wait"

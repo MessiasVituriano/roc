@@ -364,17 +364,13 @@ class AdminController extends Controller
         );
     }
 
-    /** Zera os votos da rodada atual — saída de emergência durante o evento. */
+    /**
+     * Recarrega a rodada atual: zera os votos dela e volta ao ponto de abrir a
+     * votação. Saída de emergência durante o evento.
+     */
     public function resetRound(): JsonResponse
     {
-        $event = $this->requireEvent();
-
-        if ($question = $event->currentQuestion()) {
-            TableVote::where('question_id', $question->id)->delete();
-            ParticipantVote::where('question_id', $question->id)->delete();
-        }
-
-        return $this->respond($event->refresh());
+        return $this->respond($this->flow->resetRound($this->requireEvent()));
     }
 
     /**

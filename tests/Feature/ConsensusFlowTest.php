@@ -947,7 +947,12 @@ class ConsensusFlowTest extends TestCase
             ->assertJsonPath('question.manual_scoring', true);
     }
 
-    public function test_resetting_a_round_clears_its_votes(): void
+    /**
+     * Recarregar a rodada: zera os votos **e** devolve o evento ao ponto de
+     * abrir a votação. Zerar sem voltar o estado deixava o telão exibindo uma
+     * distribuição vazia quando a rodada já tinha sido revelada.
+     */
+    public function test_reloading_a_round_clears_its_votes_and_reopens_it(): void
     {
         $this->postJson('/api/admin/open', [], $this->master);
         $token = $this->join('Ana', 1);
@@ -955,10 +960,56 @@ class ConsensusFlowTest extends TestCase
         $this->postJson('/api/vote', [
             'option_id' => $this->optionWorth($this->question(1, 1), 150),
         ], $this->auth($token));
+        $this->postJson('/api/admin/reveal', [], $this->master);
 
         $this->assertDatabaseCount('participant_votes', 1);
-        $this->postJson('/api/admin/reset-round', [], $this->master)->assertOk();
+
+        $this->postJson('/api/admin/reset-round', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round_status', 'idle')
+            ->assertJsonPath('event.round', 1)
+            ->assertJsonPath('results', null);
+
         $this->assertDatabaseCount('participant_votes', 0);
+
+        // e a rodada roda de novo, do início
+        $this->postJson('/api/admin/start', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round_status', 'voting')
+            ->assertJsonPath('event.round', 1)
+            ->assertJsonPath('timer.duration', 30);
+
+        $this->postJson('/api/vote', [
+            'option_id' => $this->optionWorth($this->question(1, 1), 80),
+        ], $this->auth($token))->assertCreated();
+
+        $this->assertDatabaseCount('participant_votes', 1);
+    }
+
+    /** Recarregar uma rodada não encosta nas outras. */
+    public function test_reloading_a_round_leaves_the_other_rounds_alone(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $token = $this->join('Ana', 1);
+
+        $this->postJson('/api/admin/start', [], $this->master);
+        $this->postJson('/api/vote', [
+            'option_id' => $this->optionWorth($this->question(1, 1), 150),
+        ], $this->auth($token));
+        $this->postJson('/api/admin/reveal', [], $this->master);
+        $this->postJson('/api/admin/next', [], $this->master);
+
+        $this->postJson('/api/admin/start', [], $this->master);
+        $this->postJson('/api/vote', [
+            'option_id' => $this->optionWorth($this->question(1, 2), 80),
+        ], $this->auth($token));
+
+        $this->postJson('/api/admin/reset-round', [], $this->master)->assertOk();
+
+        // o voto da rodada 2 se foi, o da 1 continua no placar
+        $this->assertDatabaseCount('participant_votes', 1);
+        $this->assertSame(150, $this->getJson('/api/admin/overview', $this->master)
+            ->json('individual_ranking.0.points'));
     }
 
     public function test_join_requires_a_contact_and_the_hotel(): void

@@ -245,6 +245,35 @@ class EventFlowService
     }
 
     /**
+     * Recarregar a rodada: apaga os votos dela e devolve o evento ao ponto de
+     * abrir a votação.
+     *
+     * A saída de emergência do vivo — a pergunta subiu no telão antes da hora,
+     * a sala votou no meio de uma explicação, o ensaio deixou voto de teste.
+     * Zerar os votos sem devolver o estado deixava o telão exibindo uma
+     * distribuição vazia quando a rodada já tinha sido revelada, então as duas
+     * coisas andam juntas.
+     *
+     * Não mexe em nenhuma outra rodada: os votos moram na pergunta, e é só a
+     * pergunta corrente que é limpa aqui.
+     */
+    public function resetRound(Event $event): Event
+    {
+        if ($question = $event->currentQuestion()) {
+            TableVote::where('question_id', $question->id)->delete();
+            ParticipantVote::where('question_id', $question->id)->delete();
+        }
+
+        $event->update([
+            'round_status' => Event::ROUND_IDLE,
+            'round_started_at' => null,
+            'round_ends_at' => null,
+        ]);
+
+        return $event->refresh();
+    }
+
+    /**
      * Rodada anterior — o desfazer de um "⏭ Próxima rodada" clicado antes da
      * hora, e o caminho para reabrir uma rodada no telão durante a conversa.
      *
