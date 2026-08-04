@@ -71,6 +71,12 @@ class AdminController extends Controller
         return $this->respond($this->flow->nextRound($this->requireEvent()));
     }
 
+    /** Volta uma rodada — e, na primeira da fase, volta a fase inteira. */
+    public function previous(): JsonResponse
+    {
+        return $this->respond($this->flow->previousRound($this->requireEvent()));
+    }
+
     /** Os +10s / +30s do painel: estica a rodada sem reiniciar o cronômetro. */
     public function addTime(Request $request): JsonResponse
     {
@@ -358,17 +364,13 @@ class AdminController extends Controller
         );
     }
 
-    /** Zera os votos da rodada atual — saída de emergência durante o evento. */
+    /**
+     * Recarrega a rodada atual: zera os votos dela e volta ao ponto de abrir a
+     * votação. Saída de emergência durante o evento.
+     */
     public function resetRound(): JsonResponse
     {
-        $event = $this->requireEvent();
-
-        if ($question = $event->currentQuestion()) {
-            TableVote::where('question_id', $question->id)->delete();
-            ParticipantVote::where('question_id', $question->id)->delete();
-        }
-
-        return $this->respond($event->refresh());
+        return $this->respond($this->flow->resetRound($this->requireEvent()));
     }
 
     /**

@@ -31,6 +31,7 @@ Route::prefix('admin')->middleware('master')->group(function () {
     Route::post('/reveal', [AdminController::class, 'reveal']);
     Route::post('/unreveal', [AdminController::class, 'unreveal']);
     Route::post('/next', [AdminController::class, 'next']);
+    Route::post('/previous', [AdminController::class, 'previous']);
     Route::post('/add-time', [AdminController::class, 'addTime']);
     Route::post('/reset-round', [AdminController::class, 'resetRound']);
     Route::post('/reset-event', [AdminController::class, 'resetEvent']);

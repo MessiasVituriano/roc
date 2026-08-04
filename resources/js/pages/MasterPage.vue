@@ -110,6 +110,15 @@ const votingClosed = computed(() => voting.value && !votingOpen.value)
 // só dá para abrir a votação quando o evento já foi aberto e a rodada está parada
 const canStart = computed(() => !isDraft.value && !isFinished.value && idle.value)
 
+// Voltar rodada: travado durante a votação aberta, para um clique torto não
+// derrubar a rodada que está correndo — ⏹ Encerrar primeiro, e aí volta.
+const backLeavesPhase = computed(() => (event.value?.round ?? 1) === 1 && (event.value?.phase ?? 1) > 1)
+const canGoBack = computed(
+    () => !isDraft.value
+        && !votingOpen.value
+        && ((event.value?.round ?? 1) > 1 || backLeavesPhase.value),
+)
+
 // o passo do roteiro em que estamos — ilumina o stepper e o botão recomendado
 const STEPS = [
     { key: 'open', label: 'Abrir' },
@@ -176,6 +185,38 @@ async function action(name, path, body) {
     } finally {
         busy.value = ''
     }
+}
+
+/**
+ * Voltar uma rodada. Na primeira da fase o passo é maior — volta a fase
+ * inteira —, e aí vale perguntar antes: é o desfazer de um "Ir para a Fase 2"
+ * clicado sem querer, não um passo de roteiro.
+ */
+async function previousRound() {
+    if (backLeavesPhase.value) {
+        const ok = window.confirm(
+            `Voltar para a Fase ${(event.value?.phase ?? 2) - 1}?\n\nO evento retoma na última rodada dela. Nenhum voto é apagado.`,
+        )
+
+        if (!ok) return
+    }
+
+    await action('previous', '/admin/previous')
+}
+
+/**
+ * Rodar a rodada atual de novo, do zero. Apaga voto — e voto apagado no meio
+ * do evento não volta —, então pergunta antes.
+ */
+async function reloadRound() {
+    const votes = progress.value.answered
+    const ok = window.confirm(
+        votes > 0
+            ? `Recarregar a rodada ${event.value?.round}?\n\nOs ${votes} votos já registrados nela serão apagados e a rodada volta para o ponto de abrir a votação. As outras rodadas não são afetadas.`
+            : `Recarregar a rodada ${event.value?.round}?\n\nEla volta para o ponto de abrir a votação.`,
+    )
+
+    if (ok) await action('reset', '/admin/reset-round')
 }
 
 // destrutivo: pede confirmação antes de apagar tudo e recomeçar do zero
@@ -383,6 +424,23 @@ async function saveLayout() {
                             ⏭ Próxima rodada
                         </button>
 
+                        <!--
+                            Voltar. Discreto de propósito: é conserto de clique
+                            torto e recurso de narrativa (rever uma rodada no
+                            telão durante a conversa), não passo do roteiro.
+                            A rodada que já foi jogada volta revelada.
+                        -->
+                        <button
+                            class="w-full rounded-xl px-4 py-2 text-xs font-semibold text-slate-400 hover:text-fuchsia-300 transition disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-slate-400"
+                            :disabled="!canGoBack || busy === 'previous'"
+                            :title="backLeavesPhase
+                                ? 'Volta para a última rodada da fase anterior'
+                                : 'Volta para a rodada anterior — nenhum voto é apagado'"
+                            @click="previousRound"
+                        >
+                            ⏮ {{ backLeavesPhase ? `Voltar para a Fase ${(event?.phase ?? 2) - 1}` : 'Rodada anterior' }}
+                        </button>
+
                         <!-- corrigir uma revelação precoce -->
                         <button
                             v-if="revealed"
@@ -390,6 +448,20 @@ async function saveLayout() {
                             @click="action('unreveal', '/admin/unreveal')"
                         >
                             ↩ Reabrir votação (desfazer revelação)
+                        </button>
+
+                        <!--
+                            Rodar esta rodada de novo, do zero. Fica aqui, com
+                            os outros controles de rodada, porque é onde o
+                            facilitador procura quando a rodada deu errado.
+                        -->
+                        <button
+                            class="w-full rounded-xl px-4 py-2 text-xs font-semibold text-slate-400 hover:text-rose-300 transition disabled:opacity-30 disabled:cursor-not-allowed"
+                            :disabled="isDraft || busy === 'reset'"
+                            title="Apaga os votos desta rodada e volta para o ponto de abrir a votação"
+                            @click="reloadRound"
+                        >
+                            🔄 Recarregar a rodada (zera os votos)
                         </button>
                     </template>
                 </div>
@@ -444,13 +516,6 @@ async function saveLayout() {
                     >
                         🏁 Finalizar evento
                     </button>
-                    <button
-                        class="w-full rounded-2xl px-4 py-2 text-xs font-semibold text-slate-400 hover:text-rose-300 transition"
-                        @click="action('reset', '/admin/reset-round')"
-                    >
-                        Zerar votos da rodada
-                    </button>
-
                     <div class="pt-2 mt-1 border-t border-white/10">
                         <button
                             class="w-full rounded-2xl px-4 py-3 text-sm font-black text-white bg-gradient-to-r from-rose-600 to-orange-600 hover:brightness-110 active:scale-95 transition disabled:opacity-50 disabled:cursor-wait"
