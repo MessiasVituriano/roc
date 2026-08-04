@@ -24,6 +24,11 @@ class SeedDemoParticipants extends Command
         'Gustavo', 'Renata', 'Felipe', 'Aline', 'Rodrigo', 'Juliana', 'Marcelo',
     ];
 
+    protected array $hotels = [
+        'Hotel Aurora', 'Pousada do Porto', 'Grand Plaza', 'Resort Mar Azul',
+        'Hotel Serra Verde', 'Ibis Centro', 'Villa Marina', 'Hotel Bandeirantes',
+    ];
+
     public function handle(): int
     {
         $event = Event::query()->orderByDesc('id')->first();
@@ -51,7 +56,11 @@ class SeedDemoParticipants extends Command
                 'event_id' => $event->id,
                 'event_table_id' => $table->id,
                 'name' => $this->names[$i % count($this->names)].' '.Str::upper(Str::random(1)).'.',
-                'email' => 'demo'.$i.'@exemplo.com',
+                // metade entra por e-mail, metade por telefone — é assim que a
+                // sala real se divide, e o ensaio precisa exercitar os dois
+                'email' => $i % 2 === 0 ? 'demo'.$i.'@exemplo.com' : null,
+                'phone' => $i % 2 === 0 ? null : str_pad((string) (11900000000 + $i), 11, '0', STR_PAD_LEFT),
+                'hotel' => $this->hotels[$i % count($this->hotels)],
                 'gender' => ['male', 'female', 'custom'][$i % 3],
                 'avatar_seed' => 'demo-'.$i.'-'.Str::random(6),
                 'device_token' => Str::random(48),

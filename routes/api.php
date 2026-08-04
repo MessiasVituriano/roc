@@ -47,6 +47,9 @@ Route::prefix('admin')->middleware('master')->group(function () {
     Route::post('/bonus-round', [AdminController::class, 'bonusRound']);
     Route::post('/end', [AdminController::class, 'end']);
 
+    // pessoas: tira do ranking individual sem tirar da dinâmica
+    Route::post('/participants/{participant}/block', [AdminController::class, 'blockParticipant']);
+
     // mesas e layout
     Route::post('/tables/{table}/representative', [AdminController::class, 'setRepresentative']);
     Route::post('/tables', [AdminController::class, 'storeTable']);

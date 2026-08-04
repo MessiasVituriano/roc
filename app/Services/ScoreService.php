@@ -89,8 +89,20 @@ class ScoreService
 
     /**
      * Camada 1 — ranking individual, somando as rodadas da Fase 1.
+     *
+     * Quem o facilitador bloqueou fica de fora: o bloqueio existe justamente
+     * para tirar alguém do pódio sem tirá-lo da dinâmica. Repare que o corte é
+     * aqui e em nenhum outro lugar — os votos da pessoa continuam somando para
+     * a mesa dela e para o grupo de missão, porque apagá-los reescreveria o
+     * critério de vitória por causa de um problema de vitrine.
+     *
+     * O painel do facilitador (`$forMaster`) recebe também os bloqueados — é de
+     * lá que se desbloqueia quem foi bloqueado por engano — e o hotel de cada
+     * pessoa, que é como ele identifica quem é quem numa sala de 150. As linhas
+     * bloqueadas vêm sem posição, para não deslocar a numeração de quem está no
+     * páreo. O telão não recebe nem uma coisa nem outra.
      */
-    public function individualRanking(Event $event, int $limit = 0): array
+    public function individualRanking(Event $event, int $limit = 0, bool $forMaster = false): array
     {
         $totals = ParticipantVote::query()
             ->join('questions', 'questions.id', '=', 'participant_votes.question_id')
@@ -122,8 +134,9 @@ class ScoreService
 
         $rows = $event->participants()
             ->with(['mission', 'table'])
+            ->when(! $forMaster, fn ($query) => $query->whereNull('blocked_at'))
             ->get()
-            ->map(function (Participant $p) use ($totals, $correct, $rounds, $tablePhaseTwo, $tableCorrect) {
+            ->map(function (Participant $p) use ($totals, $correct, $rounds, $tablePhaseTwo, $tableCorrect, $forMaster) {
                 $row = $totals->get($p->id);
                 $answered = (int) ($row->answered ?? 0);
                 $hits = (int) ($correct[$p->id] ?? 0);
@@ -143,6 +156,7 @@ class ScoreService
                     'name' => $p->name,
                     'avatar_seed' => $p->avatar_seed,
                     'gender' => $p->gender,
+                    'blocked' => $p->isBlocked(),
                     'table' => $p->table?->name,
                     'table_icon' => $p->table?->icon,
                     'mission' => $p->mission?->name,
@@ -162,12 +176,17 @@ class ScoreService
 
                     // a pessoa por inteiro: decidindo sozinha + decidindo junto
                     'combined_points' => $own + $mesaPoints,
-                ];
+                ] + ($forMaster ? ['hotel' => $p->hotel] : []);
             })
             ->sortByDesc('points')
             ->values();
 
-        $ranked = $rows->map(fn ($row, $i) => $row + ['position' => $i + 1]);
+        $position = 0;
+
+        // bloqueado não numera: ele não está disputando as posições
+        $ranked = $rows->map(fn ($row) => $row + [
+            'position' => $row['blocked'] ? null : ++$position,
+        ]);
 
         return ($limit > 0 ? $ranked->take($limit) : $ranked)->all();
     }
