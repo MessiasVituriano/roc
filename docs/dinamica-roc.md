@@ -76,7 +76,7 @@ justamente o conflito **dentro da mesa** que a rodada final precisa resolver.
 | Etapa | Tempo | Observação |
 |---|---|---|
 | Abertura e contexto | 1 min | facilitador apresenta o cenário do hotel |
-| Fase 1 — 5 rodadas individuais | 6 min | **~20s de votação + 20s de revelação por rodada** |
+| Fase 1 — 5 rodadas individuais | 6 min | **30s de votação + ~20s de revelação por rodada** |
 | Virada de fase (revelação por grupo de missão) | 2 min | o viés aparece no placar |
 | Fase 2 — rodada final por mesa | 6 min | **~5 min de consenso + lançamento da pontuação** |
 | **O comparativo** (gabarito + rodada final) | 3 min | a prova numérica do objetivo 2 |
@@ -85,9 +85,11 @@ justamente o conflito **dentro da mesa** que a rodada final precisa resolver.
 
 Total ~23 min + margem. O roteiro pressupõe facilitador experiente.
 
-> Para ajustar o relógio da rodada final: `LiveConsensusSeeder::FINAL_ROUND_DURATION`
-> (padrão 300s) antes de semear. Ao vivo, **⏹ Encerrar** corta a rodada a
-> qualquer momento e **+10s / +30s** a estica.
+> Para ajustar os relógios antes de semear: `LiveConsensusSeeder::PHASE_ONE_DURATION`
+> (padrão 30s, cada rodada da Fase 1) e `LiveConsensusSeeder::FINAL_ROUND_DURATION`
+> (padrão 300s). Ao vivo, **⏹ Encerrar** corta a rodada a qualquer momento e
+> **+10s / +30s** a estica. Dentro da rodada aberta, cada pessoa pode trocar a
+> alternativa quantas vezes quiser — vale a última.
 
 ## 4. Pontuação (novo — não existe no sistema hoje)
 

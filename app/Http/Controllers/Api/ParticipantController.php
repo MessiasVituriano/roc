@@ -65,17 +65,35 @@ class ParticipantController extends Controller
         abort_if($event->status === Event::STATUS_FINISHED, 423, 'Este evento já foi encerrado.');
 
         // normalise before validating, so "ANA@x.com" collides with "ana@x.com"
-        // at the validation layer instead of blowing up on the unique index
-        if (is_string($request->input('email'))) {
-            $request->merge(['email' => mb_strtolower(trim($request->input('email')))]);
-        }
+        // — e para que "(11) 99999-9999" e "11999999999" sejam a mesma pessoa —
+        // na camada de validação, em vez de estourar no índice único
+        $email = is_string($request->input('email'))
+            ? mb_strtolower(trim($request->input('email')))
+            : '';
+        $phone = is_string($request->input('phone'))
+            ? $this->normalisePhone($request->input('phone'))
+            : '';
+
+        // campo em branco é campo não preenchido: é o nulo que o índice único
+        // deixa repetir, e é o nulo que faz o *outro* contato virar obrigatório
+        $request->merge([
+            'email' => $email !== '' ? $email : null,
+            'phone' => $phone !== '' ? $phone : null,
+        ]);
 
         $data = $request->validate([
             'name' => ['required', 'string', 'max:60'],
+            // e-mail **ou** telefone: quem está na operação nem sempre tem
+            // e-mail à mão, e travar a entrada por isso custa gente na sala
             'email' => [
-                'required', 'email:rfc', 'max:120',
+                'required_without:phone', 'nullable', 'email:rfc', 'max:120',
                 Rule::unique('participants', 'email')->where('event_id', $event->id),
             ],
+            'phone' => [
+                'required_without:email', 'nullable', 'digits_between:10,13',
+                Rule::unique('participants', 'phone')->where('event_id', $event->id),
+            ],
+            'hotel' => ['required', 'string', 'max:120'],
             'gender' => ['required', Rule::in(['male', 'female', 'custom'])],
             'table_id' => ['required', Rule::exists('event_tables', 'id')->where('event_id', $event->id)],
             // optional: lets the join screen show the exact avatar the person will get
@@ -83,13 +101,20 @@ class ParticipantController extends Controller
         ], [
             'email.unique' => 'Este e-mail já entrou na dinâmica.',
             'email.email' => 'Informe um e-mail válido.',
+            'email.required_without' => 'Informe um e-mail ou um telefone.',
+            'phone.unique' => 'Este telefone já entrou na dinâmica.',
+            'phone.digits_between' => 'Informe um telefone válido, com DDD.',
+            'phone.required_without' => 'Informe um e-mail ou um telefone.',
+            'hotel.required' => 'Informe o hotel em que você trabalha.',
         ]);
 
         $participant = Participant::create([
             'event_id' => $event->id,
             'event_table_id' => $data['table_id'],
             'name' => trim($data['name']),
-            'email' => $data['email'],
+            'email' => $data['email'] ?? null,
+            'phone' => $data['phone'] ?? null,
+            'hotel' => trim($data['hotel']),
             'gender' => $data['gender'],
             'avatar_seed' => $data['avatar_seed'] ?? Str::random(12),
             'device_token' => Str::random(48),
@@ -161,9 +186,14 @@ class ParticipantController extends Controller
             'A rodada final não tem resposta a registrar pela mesa.',
         );
 
-        $claimed = EventTable::where('id', $participant->event_table_id)
-            ->whereNull('representative_id')
-            ->update(['representative_id' => $participant->id]);
+        // Bloqueado não assume — e não fica sabendo disso. A resposta é a mesma
+        // de quem chegou em segundo lugar no botão, que é o caminho normal de
+        // todo mundo que não assumiu a mesa.
+        $claimed = $participant->isBlocked()
+            ? 0
+            : EventTable::where('id', $participant->event_table_id)
+                ->whereNull('representative_id')
+                ->update(['representative_id' => $participant->id]);
 
         $table = EventTable::find($participant->event_table_id);
 
@@ -198,21 +228,25 @@ class ParticipantController extends Controller
         $option = Option::find($data['option_id']);
 
         if ($question->isIndividual()) {
-            // uma linha por pessoa por rodada — o índice único é a garantia
-            $vote = ParticipantVote::firstOrCreate(
-                [
-                    'participant_id' => $participant->id,
-                    'question_id' => $question->id,
-                ],
-                [
-                    'option_id' => $option->id,
-                    'event_table_id' => $participant->event_table_id,
-                    'mission_id' => $participant->mission_id,
-                    // pontos congelados no voto: editar a régua depois não
-                    // reescreve o placar já formado
-                    'points' => $option->points,
-                ],
-            );
+            // uma linha por pessoa por rodada — o índice único é a garantia.
+            // Votar de novo **troca** a escolha em vez de ser recusado: mudar
+            // de ideia enquanto o cronômetro corre faz parte da decisão, e o
+            // fecho da rodada (`isAcceptingVotes`, acima) é que trava a linha.
+            $vote = ParticipantVote::firstOrNew([
+                'participant_id' => $participant->id,
+                'question_id' => $question->id,
+            ]);
+
+            $changed = $vote->exists && $vote->option_id !== $option->id;
+
+            $vote->fill([
+                'option_id' => $option->id,
+                'event_table_id' => $participant->event_table_id,
+                'mission_id' => $participant->mission_id,
+                // pontos congelados no voto: editar a régua depois não
+                // reescreve o placar já formado
+                'points' => $option->points,
+            ])->save();
         } else {
             $table = $participant->table;
 
@@ -235,25 +269,45 @@ class ParticipantController extends Controller
                 );
             }
 
-            $vote = TableVote::firstOrCreate(
-                [
-                    'event_table_id' => $table->id,
-                    'question_id' => $question->id,
-                ],
-                [
-                    'option_id' => $option->id,
-                    'participant_id' => $participant->id,
-                    'points' => $option->points,
-                ],
-            );
+            // a mesa também pode corrigir a decisão enquanto a rodada corre —
+            // é o representante registrando o que a mesa acabou de combinar
+            $vote = TableVote::firstOrNew([
+                'event_table_id' => $table->id,
+                'question_id' => $question->id,
+            ]);
+
+            $changed = $vote->exists && $vote->option_id !== $option->id;
+
+            $vote->fill([
+                'option_id' => $option->id,
+                'participant_id' => $participant->id,
+                'points' => $option->points,
+            ])->save();
         }
 
         return response()->json([
-            'accepted' => $vote->wasRecentlyCreated,
+            // gravou: a rodada estava aberta e a escolha vale. `changed` separa
+            // a troca do primeiro voto, para a tela dizer a coisa certa
+            'accepted' => true,
+            'changed' => $changed,
             'option_id' => $vote->option_id,
             // os pontos não voltam aqui: só depois da revelação do facilitador
             'status' => $this->state->status($event, $participant->refresh()),
         ], $vote->wasRecentlyCreated ? 201 : 200);
+    }
+
+    /**
+     * O telefone como ele entra no índice único: só dígitos, sem o código do
+     * país. "+55 (11) 99999-9999" e "11999999999" são a mesma pessoa, e o
+     * cadastro é feito no celular, em pé, no auditório — não dá para exigir
+     * um formato.
+     */
+    protected function normalisePhone(string $phone): string
+    {
+        $digits = preg_replace('/\D+/', '', $phone) ?? '';
+
+        // 55 na frente de um número que já tem DDD é código de país, não DDD
+        return preg_match('/^55(\d{10,11})$/', $digits, $match) ? $match[1] : $digits;
     }
 
     protected function resolveParticipant(Request $request): ?Participant

@@ -55,11 +55,15 @@ const PERSON_SORTS = [
 ]
 const personSort = ref('points')
 
+// Bloqueado sai do páreo, não da lista: ele vai para o fim, esmaecido e sem
+// numeração, porque é dali que se desbloqueia quem foi bloqueado por engano.
 const peopleRanking = computed(() =>
     [...individualRanking.value]
+        .filter((row) => !row.blocked)
         .sort((a, b) => b[personSort.value] - a[personSort.value])
         .map((row, i) => ({ ...row, rank: i + 1 })),
 )
+const blockedPeople = computed(() => individualRanking.value.filter((row) => row.blocked))
 const needsTieBreak = computed(() => state.value?.needs_tie_break ?? false)
 
 const individual = computed(() => event.value?.phase_mode === 'individual')
@@ -183,6 +187,15 @@ async function resetEvent() {
     if (ok) {
         await action('resetEvent', '/admin/reset-event')
     }
+}
+
+/**
+ * Tira a pessoa do ranking individual — o único placar que vai ao telão com
+ * nome e avatar. Os votos dela continuam somando para a mesa e para o grupo de
+ * missão, e o celular dela não muda de comportamento.
+ */
+function setBlocked(participantId, blocked) {
+    action(`block-${participantId}`, `/admin/participants/${participantId}/block`, { blocked })
 }
 
 function setRepresentative(participantId) {
@@ -600,18 +613,45 @@ async function saveLayout() {
                             <li
                                 v-for="person in selectedTable.participants" :key="person.id"
                                 class="flex items-center gap-2 text-sm"
+                                :class="person.blocked ? 'opacity-50' : ''"
                             >
                                 <PixelAvatar :seed="person.avatar_seed" :gender="person.gender" :size="24" :dim="!person.online" />
-                                <span class="text-slate-200 truncate">{{ person.name }}</span>
-                                <span v-if="person.voted" class="text-emerald-400 text-xs">✔</span>
-                                <button
-                                    v-if="!individual"
-                                    class="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-lg transition"
-                                    :class="person.is_representative ? 'bg-amber-500 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
-                                    @click="setRepresentative(person.is_representative ? null : person.id)"
-                                >
-                                    {{ person.is_representative ? '👑' : 'tornar' }}
-                                </button>
+                                <span class="min-w-0">
+                                    <span class="block truncate text-slate-200" :class="person.blocked ? 'line-through' : ''">
+                                        {{ person.name }}
+                                        <span v-if="person.voted" class="text-emerald-400 text-xs">✔</span>
+                                    </span>
+                                    <span v-if="person.hotel" class="block text-[10px] text-slate-500 truncate">
+                                        🏨 {{ person.hotel }}
+                                    </span>
+                                </span>
+                                <div class="ml-auto flex items-center gap-1 shrink-0">
+                                    <!-- fora do ranking individual; o voto dele
+                                         continua somando para a mesa -->
+                                    <button
+                                        class="text-[10px] font-bold px-2 py-0.5 rounded-lg transition"
+                                        :class="person.blocked
+                                            ? 'bg-rose-500 text-white'
+                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-rose-300'"
+                                        :disabled="busy === `block-${person.id}`"
+                                        :title="person.blocked
+                                            ? 'Bloqueado no ranking individual — clique para liberar'
+                                            : 'Tirar do ranking individual (os votos seguem contando)'"
+                                        @click="setBlocked(person.id, !person.blocked)"
+                                    >
+                                        {{ person.blocked ? '🚫' : 'bloquear' }}
+                                    </button>
+                                    <!-- bloqueado não é elegível: bloquear já
+                                         libera o posto, e o servidor recusa -->
+                                    <button
+                                        v-if="!individual && !person.blocked"
+                                        class="text-[10px] font-bold px-2 py-0.5 rounded-lg transition"
+                                        :class="person.is_representative ? 'bg-amber-500 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'"
+                                        @click="setRepresentative(person.is_representative ? null : person.id)"
+                                    >
+                                        {{ person.is_representative ? '👑' : 'tornar' }}
+                                    </button>
+                                </div>
                             </li>
                         </ul>
                     </div>
@@ -740,6 +780,7 @@ async function saveLayout() {
                                     <th class="text-right pb-1" title="Pontos da própria decisão, Fase 1">F1</th>
                                     <th class="text-right pb-1" title="Pontos da mesa desta pessoa, Fase 2">F2</th>
                                     <th class="text-right pb-1">Total</th>
+                                    <th class="pb-1"></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -763,6 +804,10 @@ async function saveLayout() {
                                                 <span class="block text-[10px] text-slate-500 truncate">
                                                     {{ row.table_icon }} {{ row.table }} · ✔ {{ row.correct }}/{{ row.answered }}
                                                 </span>
+                                                <!-- o hotel é o que distingue dois "Ana S." na sala -->
+                                                <span v-if="row.hotel" class="block text-[10px] text-slate-400 truncate">
+                                                    🏨 {{ row.hotel }}
+                                                </span>
                                             </span>
                                         </div>
                                     </td>
@@ -776,14 +821,56 @@ async function saveLayout() {
                                     <td class="py-1 text-right font-black tabular-nums text-white align-top">
                                         {{ row.combined_points }}
                                     </td>
+                                    <td class="py-1 pl-1 align-top">
+                                        <button
+                                            class="text-[10px] text-slate-600 hover:text-rose-300 transition"
+                                            :disabled="busy === `block-${row.participant_id}`"
+                                            title="Tirar do ranking individual (os votos seguem contando para a mesa e para a missão)"
+                                            @click="setBlocked(row.participant_id, true)"
+                                        >🚫</button>
+                                    </td>
                                 </tr>
                                 <tr v-if="!peopleRanking.length">
-                                    <td colspan="5" class="py-3 text-center text-xs text-slate-500 italic">
+                                    <td colspan="6" class="py-3 text-center text-xs text-slate-500 italic">
                                         Ninguém votou ainda.
                                     </td>
                                 </tr>
                             </tbody>
                         </table>
+
+                        <!--
+                            Os bloqueados. Continuam votando e continuam somando
+                            para a mesa e para o grupo de missão — o que o
+                            bloqueio tira é o lugar no pódio individual, que é o
+                            único placar que vai ao telão com nome e avatar.
+                        -->
+                        <div v-if="blockedPeople.length" class="pt-2 mt-1 border-t border-white/10 space-y-1">
+                            <p class="text-[10px] uppercase tracking-widest text-slate-500">
+                                Fora do ranking ({{ blockedPeople.length }})
+                            </p>
+                            <div
+                                v-for="row in blockedPeople" :key="row.participant_id"
+                                class="flex items-center gap-1.5 text-xs opacity-60"
+                            >
+                                <PixelAvatar :seed="row.avatar_seed" :gender="row.gender" :size="18" />
+                                <span class="min-w-0">
+                                    <span class="block truncate text-slate-300 line-through">
+                                        {{ row.table_icon }} {{ row.name }}
+                                    </span>
+                                    <span v-if="row.hotel" class="block text-[10px] text-slate-500 truncate">
+                                        🏨 {{ row.hotel }}
+                                    </span>
+                                </span>
+                                <span class="ml-auto tabular-nums text-slate-500">{{ row.points }}</span>
+                                <button
+                                    class="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition"
+                                    :disabled="busy === `block-${row.participant_id}`"
+                                    @click="setBlocked(row.participant_id, false)"
+                                >
+                                    liberar
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 

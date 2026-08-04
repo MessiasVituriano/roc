@@ -10,13 +10,16 @@ class Participant extends Model
 {
     protected $guarded = [];
 
-    protected $hidden = ['device_token', 'email'];
+    // dado de contato não vaza por serialização acidental: as telas públicas
+    // montam os payloads campo a campo, e nenhuma delas pede contato
+    protected $hidden = ['device_token', 'email', 'phone'];
 
     protected function casts(): array
     {
         return [
             'connected' => 'boolean',
             'last_seen' => 'datetime',
+            'blocked_at' => 'datetime',
         ];
     }
 
@@ -46,5 +49,21 @@ class Participant extends Model
     public function isOnline(): bool
     {
         return $this->last_seen !== null && $this->last_seen->gt(now()->subSeconds(15));
+    }
+
+    /**
+     * Bloqueado pelo facilitador: sai do ranking individual e continua na
+     * dinâmica. Os votos seguem contando para a mesa e para o grupo de missão —
+     * o bloqueio é sobre aparecer no pódio, não sobre participar.
+     */
+    public function isBlocked(): bool
+    {
+        return $this->blocked_at !== null;
+    }
+
+    /** O contato que a pessoa deixou: e-mail ou telefone, um dos dois. */
+    public function contact(): ?string
+    {
+        return $this->email ?: $this->phone;
     }
 }

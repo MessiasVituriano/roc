@@ -11,9 +11,32 @@ import { CLOTHES, HAIRS, SKINS, STYLES, encodeAvatar, randomAvatarParts } from '
 const router = useRouter()
 
 const name = ref('')
-const email = ref('')
 const gender = ref('male')
 const tableId = ref(null)
+const hotel = ref('')
+
+// Contato: e-mail **ou** telefone, um só campo. Quem está na operação nem
+// sempre tem e-mail à mão, e o cadastro é feito em pé, no auditório — cada
+// campo a menos é gente que não desiste no meio.
+const CONTACTS = [
+    { key: 'email', label: 'E-mail' },
+    { key: 'phone', label: 'Telefone' },
+]
+const contactType = ref('email')
+// guardados separados: alternar o tipo e voltar não apaga o que já foi digitado
+const email = ref('')
+const phoneDigits = ref('')
+
+// a máscara é só da tela; o que viaja para a API são os dígitos
+const phoneMasked = computed(() => {
+    const d = phoneDigits.value
+
+    if (d.length <= 2) return d
+    if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`
+    if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`
+
+    return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7, 11)}`
+})
 
 // the avatar is assembled, not rolled: these indexes are encoded into the seed
 const parts = ref(randomAvatarParts())
@@ -39,8 +62,19 @@ function surprise() {
 
 const chosenTable = computed(() => tables.value.find((t) => t.id === tableId.value) ?? null)
 const emailLooksValid = computed(() => /^\S+@\S+\.\S+$/.test(email.value.trim()))
+// 10 dígitos = fixo com DDD, 11 = celular com DDD
+const phoneLooksValid = computed(() => phoneDigits.value.length >= 10)
+const contactLooksValid = computed(
+    () => (contactType.value === 'email' ? emailLooksValid : phoneLooksValid).value,
+)
+const contactFilled = computed(
+    () => (contactType.value === 'email' ? email.value.trim() : phoneDigits.value).length > 0,
+)
 const ready = computed(
-    () => name.value.trim().length >= 2 && emailLooksValid.value && tableId.value !== null,
+    () => name.value.trim().length >= 2
+        && contactLooksValid.value
+        && hotel.value.trim().length >= 2
+        && tableId.value !== null,
 )
 
 // o cadastro fica aberto até o evento ser encerrado: as pessoas entram antes e
@@ -77,7 +111,12 @@ async function join() {
     try {
         const payload = await api.post('/join', {
             name: name.value.trim(),
-            email: email.value.trim(),
+            // só o contato escolhido viaja: o outro campo pode ter sobra de
+            // digitação de antes da troca do alternador
+            ...(contactType.value === 'email'
+                ? { email: email.value.trim() }
+                : { phone: phoneDigits.value }),
+            hotel: hotel.value.trim(),
             gender: gender.value,
             table_id: tableId.value,
             avatar_seed: seed.value,
@@ -147,9 +186,27 @@ async function join() {
                 >
             </div>
 
+            <!-- contato: um campo só, o tipo é escolhido no alternador -->
             <div class="space-y-1.5">
-                <label class="text-xs font-bold uppercase tracking-widest text-slate-400">E-mail</label>
+                <div class="flex items-center gap-2">
+                    <label class="text-xs font-bold uppercase tracking-widest text-slate-400">Contato</label>
+                    <div class="ml-auto flex gap-1 rounded-xl bg-slate-800/80 p-1">
+                        <button
+                            v-for="option in CONTACTS"
+                            :key="option.key"
+                            class="rounded-lg px-3 py-1 text-[11px] font-bold transition"
+                            :class="contactType === option.key
+                                ? 'bg-indigo-500 text-white'
+                                : 'text-slate-400 hover:text-white'"
+                            @click="contactType = option.key"
+                        >
+                            {{ option.label }}
+                        </button>
+                    </div>
+                </div>
+
                 <input
+                    v-if="contactType === 'email'"
                     v-model="email"
                     type="email"
                     maxlength="120"
@@ -159,6 +216,32 @@ async function join() {
                     placeholder="voce@empresa.com"
                     class="w-full rounded-2xl bg-slate-800/80 px-4 py-3.5 text-white placeholder-slate-500 ring-2 outline-none transition"
                     :class="email && !emailLooksValid ? 'ring-rose-500/60' : 'ring-transparent focus:ring-indigo-400'"
+                >
+                <input
+                    v-else
+                    :value="phoneMasked"
+                    type="tel"
+                    inputmode="tel"
+                    autocomplete="tel"
+                    placeholder="(11) 99999-9999"
+                    class="w-full rounded-2xl bg-slate-800/80 px-4 py-3.5 text-white placeholder-slate-500 ring-2 outline-none transition"
+                    :class="phoneDigits && !phoneLooksValid ? 'ring-rose-500/60' : 'ring-transparent focus:ring-indigo-400'"
+                    @input="phoneDigits = $event.target.value.replace(/\D/g, '').slice(0, 11)"
+                >
+                <p v-if="contactFilled && !contactLooksValid" class="text-[11px] text-rose-300">
+                    {{ contactType === 'email' ? 'Informe um e-mail válido.' : 'Informe o DDD e o número.' }}
+                </p>
+            </div>
+
+            <div class="space-y-1.5">
+                <label class="text-xs font-bold uppercase tracking-widest text-slate-400">Hotel</label>
+                <input
+                    v-model="hotel"
+                    type="text"
+                    maxlength="120"
+                    autocomplete="organization"
+                    placeholder="Hotel em que você trabalha"
+                    class="w-full rounded-2xl bg-slate-800/80 px-4 py-3.5 text-white placeholder-slate-500 ring-2 ring-transparent focus:ring-indigo-400 outline-none transition"
                 >
             </div>
 

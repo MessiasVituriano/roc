@@ -31,6 +31,29 @@ const hasVoted = computed(() => me.value?.has_voted ?? false)
 const canAnswer = computed(() => me.value?.can_answer ?? false)
 const needsRepresentative = computed(() => !individual.value && !table.value?.representative_id)
 
+// A decisão pode ser trocada enquanto o cronômetro corre: as alternativas
+// continuam na tela depois de confirmar, com a escolhida marcada. Quem fecha a
+// linha é o fim do tempo (ou o facilitador), não o primeiro toque.
+const votedOptionId = computed(() => me.value?.voted_option_id ?? null)
+const willChange = computed(
+    () => hasVoted.value && selected.value !== null && selected.value !== votedOptionId.value,
+)
+const canSubmit = computed(
+    () => selected.value !== null && (!hasVoted.value || willChange.value),
+)
+const selectedLetter = computed(() => {
+    const index = question.value?.options.findIndex((o) => o.id === selected.value) ?? -1
+
+    return index < 0 ? '' : 'ABCD'[index]
+})
+const submitLabel = computed(() => {
+    if (sending.value) return 'Registrando…'
+    if (willChange.value) return `Trocar para a ${selectedLetter.value} ✔`
+    if (hasVoted.value) return 'Decisão registrada ✔'
+
+    return individual.value ? 'Confirmar minha decisão ✔' : 'Confirmar decisão da mesa ✔'
+})
+
 // A rodada final não tem alternativas: a mesa decide livremente e o facilitador
 // lança a pontuação. O celular vira o cartão da missão, e nada mais.
 const finalRound = computed(() => question.value?.manual_scoring === true)
@@ -41,9 +64,6 @@ const myScore = computed(() => {
     return index < 0 ? null : { ...finalScores.value[index], position: index + 1 }
 })
 
-const myOption = computed(
-    () => question.value?.options.find((o) => o.id === me.value?.voted_option_id) ?? null,
-)
 const myResult = computed(
     () => results.value?.options.find((o) => o.option_id === me.value?.voted_option_id) ?? null,
 )
@@ -67,9 +87,12 @@ const screen = computed(() => {
     if (event.value.round_status === 'revealed') return 'revealed'
     if (event.value.round_status === 'voting') {
         if (!event.value.voting_open) return 'waiting-reveal'
-        if (needsRepresentative.value) return 'claim'
+        // quem não responde vai para a mesma tela, seja porque outra pessoa
+        // assumiu a mesa ou porque o servidor não o deixa assumir
         if (!canAnswer.value) return 'watching'
-        return hasVoted.value ? 'voted' : 'voting'
+        if (needsRepresentative.value) return 'claim'
+        // quem já votou continua aqui: é o que permite trocar de ideia
+        return 'voting'
     }
     return 'waiting'
 })
@@ -80,6 +103,13 @@ watch(() => question.value?.id, () => {
     selected.value = null
     voteError.value = ''
 })
+
+// quem recarrega a página no meio da rodada volta com a própria escolha
+// marcada. Só preenche o vazio: uma seleção ainda não confirmada é mais nova
+// que o voto no servidor e não pode ser sobrescrita pelo poll.
+watch(votedOptionId, (id) => {
+    if (id && selected.value === null) selected.value = id
+}, { immediate: true })
 
 watch(
     () => Boolean(state.value?.event && !state.value?.me),
@@ -92,7 +122,7 @@ watch(
 )
 
 async function confirm() {
-    if (!selected.value || sending.value) return
+    if (!canSubmit.value || sending.value) return
 
     sending.value = true
     voteError.value = ''
@@ -100,12 +130,6 @@ async function confirm() {
     try {
         const payload = await api.post('/vote', { option_id: selected.value })
         state.value = payload.status
-
-        if (!payload.accepted) {
-            voteError.value = individual.value
-                ? 'Você já havia votado nesta rodada.'
-                : 'A mesa já registrou o consenso desta rodada.'
-        }
     } catch (e) {
         voteError.value = e.message
     } finally {
@@ -293,6 +317,20 @@ function leave() {
 
                     <MissionCard v-if="mission && individual" :mission="mission" compact />
 
+                    <!-- já votou: a confirmação vira uma faixa, e as
+                         alternativas continuam na tela para poder trocar -->
+                    <p
+                        v-if="hasVoted"
+                        class="rounded-2xl bg-emerald-500/15 ring-1 ring-emerald-400/40 px-4 py-2.5 text-center"
+                    >
+                        <span class="block text-sm font-black text-emerald-300">
+                            ✔ {{ individual ? 'Sua decisão está registrada' : 'Decisão da mesa registrada' }}
+                        </span>
+                        <span class="block text-[11px] text-emerald-200/70">
+                            Dá para trocar até o tempo acabar.
+                        </span>
+                    </p>
+
                     <h2 class="text-lg font-black text-white leading-snug">{{ question?.title }}</h2>
                     <p v-if="question?.context" class="text-xs text-slate-400 leading-relaxed -mt-2">
                         {{ question.context }}
@@ -300,14 +338,26 @@ function leave() {
 
                     <div class="grid gap-2.5">
                         <button
-                            v-for="option in question?.options"
+                            v-for="(option, i) in question?.options"
                             :key="option.id"
-                            class="rounded-2xl px-4 py-3.5 text-left font-bold text-white text-sm ring-2 transition-all duration-200 active:scale-[0.98]"
-                            :class="selected === option.id ? 'scale-[1.02] ring-white' : 'ring-white/10 bg-slate-800/70'"
-                            :style="selected === option.id ? { background: 'linear-gradient(90deg,#334155,#475569)' } : {}"
+                            class="rounded-2xl px-4 py-3.5 text-left font-bold text-white text-sm ring-2 transition-all duration-200 active:scale-[0.98] flex items-baseline gap-2"
+                            :class="[
+                                selected === option.id ? 'scale-[1.02] ring-white' : 'ring-white/10',
+                                option.id === votedOptionId ? 'bg-emerald-500/15' : 'bg-slate-800/70',
+                            ]"
+                            :style="selected === option.id && option.id !== votedOptionId
+                                ? { background: 'linear-gradient(90deg,#334155,#475569)' }
+                                : {}"
                             @click="selected = option.id"
                         >
-                            {{ option.text }}
+                            <span class="text-amber-300 font-black shrink-0">{{ 'ABCD'[i] }})</span>
+                            <span class="flex-1 min-w-0">{{ option.text }}</span>
+                            <span
+                                v-if="option.id === votedOptionId"
+                                class="shrink-0 text-[10px] font-black uppercase tracking-widest text-emerald-300"
+                            >
+                                ✔ sua
+                            </span>
                         </button>
                     </div>
 
@@ -316,34 +366,32 @@ function leave() {
                     </p>
 
                     <button
-                        class="mt-auto rounded-2xl px-5 py-4 font-black text-white bg-gradient-to-r from-emerald-500 to-teal-400 disabled:opacity-30 hover:brightness-110 active:scale-95 transition shadow-lg shadow-emerald-500/25"
-                        :disabled="!selected || sending"
+                        class="mt-auto rounded-2xl px-5 py-4 font-black text-white transition shadow-lg disabled:opacity-30 hover:brightness-110 active:scale-95"
+                        :class="willChange
+                            ? 'bg-gradient-to-r from-amber-500 to-orange-500 shadow-amber-500/25'
+                            : 'bg-gradient-to-r from-emerald-500 to-teal-400 shadow-emerald-500/25'"
+                        :disabled="!canSubmit || sending"
                         @click="confirm"
                     >
-                        {{ sending ? 'Registrando…' : individual ? 'Confirmar minha decisão ✔' : 'Confirmar decisão da mesa ✔' }}
+                        {{ submitLabel }}
                     </button>
                 </section>
 
-                <!-- votou, aguardando os demais -->
-                <section v-else-if="screen === 'voted'" key="voted" class="flex-1 grid place-items-center text-center">
-                    <div class="space-y-5">
-                        <div class="text-7xl animate-pop">✅</div>
-                        <h2 class="text-2xl font-black text-emerald-300">Decisão registrada</h2>
-                        <p v-if="myOption" class="text-white font-bold px-6">“{{ myOption.text }}”</p>
-                        <!-- nada de pontos aqui: o placar é revelado no telão -->
-                        <p class="text-slate-500 text-sm">Olhe para o telão.</p>
-                        <CountdownTimer :remaining="timer.remaining" :duration="timer.duration" :size="80" />
-                    </div>
-                </section>
-
-                <!-- fase 2: quem não é representante -->
+                <!--
+                    Fase 2: quem não registra pela mesa. Chega aqui quem não
+                    assumiu o posto — e, sem diferença alguma na tela, quem o
+                    facilitador bloqueou.
+                -->
                 <section v-else-if="screen === 'watching'" key="watching" class="flex-1 grid place-items-center text-center">
                     <div class="space-y-4 max-w-xs">
                         <div class="text-6xl">🗣️</div>
                         <h2 class="text-xl font-black text-white">Decidam juntos</h2>
-                        <p class="text-slate-400">
-                            <strong class="text-white">{{ table?.representative_name }}</strong>
+                        <p v-if="table?.representative_name" class="text-slate-400">
+                            <strong class="text-white">{{ table.representative_name }}</strong>
                             registra a decisão da mesa.
+                        </p>
+                        <p v-else class="text-slate-400">
+                            Cheguem a uma posição de mesa — uma pessoa registra a decisão por todos.
                         </p>
                         <p v-if="table?.has_voted" class="text-emerald-300 font-bold">✔ Já registrada</p>
                     </div>

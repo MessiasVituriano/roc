@@ -221,17 +221,62 @@ class AdminController extends Controller
                     'mission' => $p->mission?->name,
                     'mission_color' => $p->mission?->color,
                     'is_representative' => $table->representative_id === $p->id,
+                    'blocked' => $p->isBlocked(),
+                    // o contato e o hotel só existem aqui: é a gaveta que o
+                    // facilitador abre para identificar quem é quem antes de
+                    // bloquear, e ela nunca é projetada
+                    'contact' => $p->contact(),
+                    'hotel' => $p->hotel,
                 ])
                 ->all(),
         ]);
     }
 
-    /** The master can appoint or swap a table's representative for phase 2. */
+    /**
+     * Bloqueia (ou libera) uma pessoa no ranking individual.
+     *
+     * O bloqueio é de vitrine, não de participação: os votos continuam
+     * contando para a mesa e para o grupo de missão, e a pessoa segue votando
+     * pelo celular sem ver diferença alguma. O que muda é que ela sai do
+     * ranking individual — o único placar que vai ao telão com nome e avatar.
+     *
+     * É a saída para o nome impróprio, o cadastro duplicado e quem está na sala
+     * ajudando a conduzir: apagar o voto seria mexer no critério de vitória da
+     * mesa por causa de um problema que é só de exibição.
+     */
+    public function blockParticipant(Request $request, Participant $participant): JsonResponse
+    {
+        $data = $request->validate(['blocked' => ['required', 'boolean']]);
+
+        $participant->forceFill([
+            'blocked_at' => $data['blocked'] ? now() : null,
+        ])->save();
+
+        // representante bloqueado é contradição: quem não pode ser eleito
+        // também não pode continuar no posto. A mesa volta a ficar livre e o
+        // primeiro colega que tocar no botão assume.
+        if ($data['blocked']) {
+            EventTable::where('representative_id', $participant->id)
+                ->update(['representative_id' => null]);
+        }
+
+        return $this->respond($this->requireEvent());
+    }
+
+    /**
+     * The master can appoint or swap a table's representative for phase 2.
+     *
+     * Bloqueado fica fora da lista elegível — o `whereNull` no `exists` recusa
+     * pelo mesmo caminho de um id de outra mesa.
+     */
     public function setRepresentative(Request $request, EventTable $table): JsonResponse
     {
         $data = $request->validate([
             'participant_id' => ['nullable', Rule::exists('participants', 'id')
-                ->where('event_table_id', $table->id)],
+                ->where('event_table_id', $table->id)
+                ->whereNull('blocked_at')],
+        ], [
+            'participant_id.exists' => 'Esta pessoa não pode representar a mesa.',
         ]);
 
         $table->update(['representative_id' => $data['participant_id'] ?? null]);

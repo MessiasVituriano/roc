@@ -21,9 +21,18 @@ use Illuminate\Database\Seeder;
 class LiveConsensusSeeder extends Seeder
 {
     /**
-     * Tempo da rodada final. Bem maior que os 20s da Fase 1 porque a mesa
-     * precisa discutir a missão inteira antes de fechar uma posição. O
-     * facilitador ainda sobrescreve pelo painel.
+     * Tempo de cada uma das cinco rodadas da Fase 1.
+     *
+     * Trinta segundos: dez para ler o cenário do hotel, o resto para decidir —
+     * e para trocar de ideia, já que a escolha pode ser mudada enquanto o
+     * cronômetro corre. O facilitador ainda estica pelo painel (+10s / +30s).
+     */
+    public const PHASE_ONE_DURATION = 30;
+
+    /**
+     * Tempo da rodada final. Bem maior que o da Fase 1 porque a mesa precisa
+     * discutir a missão inteira antes de fechar uma posição. O facilitador
+     * ainda sobrescreve pelo painel.
      */
     public const FINAL_ROUND_DURATION = 300;
 
@@ -65,7 +74,7 @@ class LiveConsensusSeeder extends Seeder
             'phase' => 1,
             'current_round' => 1,
             'round_status' => Event::ROUND_IDLE,
-            'round_duration' => 20,
+            'round_duration' => self::PHASE_ONE_DURATION,
         ]);
 
         foreach ($this->missions as [$key, $name, $statement, $icon, $color]) {
@@ -128,7 +137,7 @@ class LiveConsensusSeeder extends Seeder
     {
         return [
             [
-                'phase' => 1, 'round' => 1, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => 20,
+                'phase' => 1, 'round' => 1, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => self::PHASE_ONE_DURATION,
                 'label' => 'TARIFA & OCUPAÇÃO',
                 'title' => 'Como você responde à queda no ritmo de reservas?',
                 'context' => 'Terça-feira, faltam 9 dias para o feriado. Forecast: ocupação 68% (meta 85%). Dois concorrentes diretos já anunciaram promoções para o mesmo período, e o ritmo de reservas está 12% abaixo do mesmo feriado do ano passado.',
@@ -141,7 +150,7 @@ class LiveConsensusSeeder extends Seeder
                 ],
             ],
             [
-                'phase' => 1, 'round' => 2, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => 20,
+                'phase' => 1, 'round' => 2, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => self::PHASE_ONE_DURATION,
                 'label' => 'GRUPO & CONGRESSO',
                 'title' => 'Como você organiza a demanda do congresso?',
                 'context' => 'Congresso de 3 dias confirmado na cidade — demanda potencial de ~40 quartos. O hotel já tem 12 quartos de grupo confirmados para a mesma data, 10% abaixo da meta de diária.',
@@ -154,7 +163,7 @@ class LiveConsensusSeeder extends Seeder
                 ],
             ],
             [
-                'phase' => 1, 'round' => 3, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => 20,
+                'phase' => 1, 'round' => 3, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => self::PHASE_ONE_DURATION,
                 'label' => 'INVESTIMENTO EM MARKETING',
                 'title' => 'Em qual campanha você investe o orçamento aprovado?',
                 'context' => 'A performance de mídia paga do hotel está 15% abaixo da meta mensal, e a diretoria pediu um resultado visível em 48h. Orçamento aprovado para apenas 1 campanha.',
@@ -167,7 +176,7 @@ class LiveConsensusSeeder extends Seeder
                 ],
             ],
             [
-                'phase' => 1, 'round' => 4, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => 20,
+                'phase' => 1, 'round' => 4, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => self::PHASE_ONE_DURATION,
                 'label' => 'NEGOCIAÇÃO DE GRUPOS',
                 'title' => 'Como você responde ao pedido do grupo de 60 quartos?',
                 'context' => 'Hotel de 220 apartamentos. Grupo de 60 quartos solicitado a R$ 520 (meta de diária média é R$ 650). Forecast individual (reservas em carteira) indica 71% de ocupação na data — restam 64 quartos livres, com ritmo de reservas forte nos últimos 10 dias e diária média projetada de R$ 670 para a demanda individual remanescente.',
@@ -180,7 +189,7 @@ class LiveConsensusSeeder extends Seeder
                 ],
             ],
             [
-                'phase' => 1, 'round' => 5, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => 20,
+                'phase' => 1, 'round' => 5, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => self::PHASE_ONE_DURATION,
                 'label' => 'DISTRIBUIÇÃO & MÍDIA PAGA',
                 'title' => 'O que você faz com o aumento de CPC proposto?',
                 'context' => 'O canal direto responde hoje por 22% das reservas, abaixo da meta de 30% definida pela diretoria. O Google Hotel Ads oferece posição de destaque nos resultados de busca por 30 dias, mediante aumento do CPC (custo por clique) em 40%.',

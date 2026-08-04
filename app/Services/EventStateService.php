@@ -151,7 +151,7 @@ class EventStateService
             ->with(['participants' => fn ($q) => $q->orderBy('id')])
             ->orderBy('id')
             ->get()
-            ->map(function (EventTable $table) use ($event, $voters, $answeredTables) {
+            ->map(function (EventTable $table) use ($event, $voters, $answeredTables, $forMaster) {
                 $participants = $table->participants;
                 $online = $participants->filter(fn (Participant $p) => $p->isOnline())->count();
 
@@ -180,7 +180,14 @@ class EventStateService
                     'participants' => $participants
                         ->map(fn (Participant $p) => $this->participant($p) + [
                             'voted' => $voters->contains($p->id),
-                        ])
+                        ] + ($forMaster ? [
+                            // decisão de moderação do facilitador: existe no
+                            // painel dele e em lugar nenhum mais
+                            'blocked' => $p->isBlocked(),
+                            // o hotel identifica quem é quem numa sala de 150 —
+                            // dois "Ana S." só se distinguem por ele
+                            'hotel' => $p->hotel,
+                        ] : []))
                         ->all(),
                 ];
             })
@@ -247,9 +254,11 @@ class EventStateService
             // O painel recebe a lista inteira porque reordena por individual,
             // mesa ou total no cliente — truncar aqui esconderia justamente
             // quem tem individual baixo e mesa alta. O telão só premia o topo.
+            // Os bloqueados e o hotel de cada pessoa só existem no painel.
             $payload['individual_ranking'] = $this->scores->individualRanking(
                 $event,
                 limit: $forMaster ? 0 : 10,
+                forMaster: $forMaster,
             );
         }
 
@@ -511,6 +520,13 @@ class EventStateService
      *
      * A rodada final é a exceção: não há alternativa a registrar, a mesa
      * discute e o facilitador lança a pontuação. Ninguém responde pelo celular.
+     *
+     * Quem o facilitador bloqueou não assume a mesa. A Fase 1 não muda para
+     * ele — continua votando e continua somando —, mas o posto de
+     * representante é a única forma de uma pessoa aparecer *falando pela mesa*,
+     * e é justamente isso que o bloqueio existe para evitar. Sem exceção
+     * visível: para ele a tela é a de quem não é representante, a mesma que
+     * qualquer colega vê quando outra pessoa assumiu.
      */
     public function canAnswer(
         Event $event,
@@ -524,7 +540,7 @@ class EventStateService
 
         $question ??= $event->currentQuestion();
 
-        if ($question?->isManual()) {
+        if ($question?->isManual() || $participant->isBlocked()) {
             return false;
         }
 

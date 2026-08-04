@@ -31,6 +31,7 @@ class ConsensusFlowTest extends TestCase
         return $this->postJson('/api/join', [
             'name' => $name,
             'email' => Str::slug($name).'@exemplo.com',
+            'hotel' => 'Hotel Aurora',
             'gender' => 'female',
             'table_id' => $tableId,
         ])->assertCreated()->json('token');
@@ -455,7 +456,7 @@ class ConsensusFlowTest extends TestCase
             ->json('individual_ranking.0.points'));
     }
 
-    public function test_nobody_votes_twice_in_the_same_round(): void
+    public function test_each_person_keeps_a_single_vote_per_round(): void
     {
         $this->postJson('/api/admin/open', [], $this->master);
         $ana = $this->join('Ana', 1);
@@ -470,12 +471,67 @@ class ConsensusFlowTest extends TestCase
         $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, -50)], $this->auth($bruno))
             ->assertCreated();
 
+        $this->assertDatabaseCount('participant_votes', 2);
+    }
+
+    /**
+     * Mudar de ideia faz parte da decisão: enquanto o cronômetro corre, o novo
+     * voto substitui o anterior — e leva junto a pontuação da nova escolha.
+     */
+    public function test_a_vote_can_be_changed_while_the_round_is_open(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+        $this->postJson('/api/admin/start', [], $this->master);
+
+        $question = $this->question(1, 1);
+
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 150)], $this->auth($ana))
+            ->assertCreated()
+            ->assertJsonPath('accepted', true)
+            ->assertJsonPath('changed', false);
+
         $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 80)], $this->auth($ana))
             ->assertOk()
-            ->assertJsonPath('accepted', false)
-            ->assertJsonPath('option_id', $this->optionWorth($question, 150));
+            ->assertJsonPath('accepted', true)
+            ->assertJsonPath('changed', true)
+            ->assertJsonPath('option_id', $this->optionWorth($question, 80))
+            ->assertJsonPath('status.me.voted_option_id', $this->optionWorth($question, 80));
 
-        $this->assertDatabaseCount('participant_votes', 2);
+        // uma linha só, com a pontuação recongelada na escolha nova
+        $this->assertDatabaseCount('participant_votes', 1);
+        $this->assertDatabaseHas('participant_votes', [
+            'participant_id' => Participant::first()->id,
+            'option_id' => $this->optionWorth($question, 80),
+            'points' => 80,
+        ]);
+
+        // repetir a mesma alternativa não é troca
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 80)], $this->auth($ana))
+            ->assertOk()
+            ->assertJsonPath('changed', false);
+
+        // e o placar segue a última escolha
+        $this->assertSame(80, $this->getJson('/api/admin/overview', $this->master)
+            ->json('individual_ranking.0.points'));
+    }
+
+    /** Fechada a rodada, a escolha vira definitiva — inclusive para trocar. */
+    public function test_a_vote_cannot_be_changed_after_the_round_closes(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+        $this->postJson('/api/admin/start', [], $this->master);
+
+        $question = $this->question(1, 1);
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 150)], $this->auth($ana));
+
+        $this->postJson('/api/admin/close', [], $this->master)->assertOk();
+
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, -50)], $this->auth($ana))
+            ->assertStatus(409);
+
+        $this->assertDatabaseHas('participant_votes', ['points' => 150]);
     }
 
     public function test_votes_are_rejected_once_the_round_closes(): void
@@ -810,31 +866,288 @@ class ConsensusFlowTest extends TestCase
         $this->assertDatabaseCount('participant_votes', 0);
     }
 
-    public function test_join_requires_a_valid_and_unique_email(): void
+    public function test_join_requires_a_contact_and_the_hotel(): void
     {
         $this->postJson('/api/admin/open', [], $this->master);
 
-        $this->postJson('/api/join', ['name' => 'Ana', 'gender' => 'female', 'table_id' => 1])
-            ->assertStatus(422)->assertJsonValidationErrors('email');
+        // sem contato nenhum: os dois campos reclamam, porque um deles resolve
+        $this->postJson('/api/join', ['name' => 'Ana', 'hotel' => 'Aurora', 'gender' => 'female', 'table_id' => 1])
+            ->assertStatus(422)->assertJsonValidationErrors(['email', 'phone']);
 
+        // com contato, mas sem hotel
         $this->postJson('/api/join', [
             'name' => 'Ana', 'email' => 'ana@exemplo.com', 'gender' => 'female', 'table_id' => 1,
-        ])->assertCreated();
+        ])->assertStatus(422)->assertJsonValidationErrors('hotel');
 
         $this->postJson('/api/join', [
-            'name' => 'Ana 2', 'email' => 'ANA@exemplo.com', 'gender' => 'female', 'table_id' => 2,
+            'name' => 'Ana', 'email' => 'ana@exemplo.com', 'hotel' => 'Aurora',
+            'gender' => 'female', 'table_id' => 1,
+        ])->assertCreated();
+
+        // e-mail repetido, mesmo com outra caixa, é a mesma pessoa
+        $this->postJson('/api/join', [
+            'name' => 'Ana 2', 'email' => 'ANA@exemplo.com', 'hotel' => 'Aurora',
+            'gender' => 'female', 'table_id' => 2,
         ])->assertStatus(422)->assertJsonValidationErrors('email');
 
         $this->assertDatabaseCount('participants', 1);
+        $this->assertDatabaseHas('participants', [
+            'email' => 'ana@exemplo.com',
+            'phone' => null,
+            'hotel' => 'Aurora',
+        ]);
     }
 
-    public function test_participant_emails_never_leak_to_other_screens(): void
+    /**
+     * Quem trabalha na operação nem sempre tem e-mail à mão. O telefone entra
+     * como dígitos — "(11) 99999-9999" e "+55 11 99999-9999" são a mesma
+     * pessoa, e o índice único precisa enxergar isso.
+     */
+    public function test_join_accepts_a_phone_instead_of_an_email(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+
+        $this->postJson('/api/join', [
+            'name' => 'Bruno', 'phone' => '(11) 98888-7777', 'hotel' => 'Pousada do Porto',
+            'gender' => 'male', 'table_id' => 1,
+        ])->assertCreated();
+
+        $this->assertDatabaseHas('participants', [
+            'name' => 'Bruno',
+            'email' => null,
+            'phone' => '11988887777',
+            'hotel' => 'Pousada do Porto',
+        ]);
+
+        // o mesmo número com código de país não pode virar uma segunda pessoa
+        $this->postJson('/api/join', [
+            'name' => 'Bruno de novo', 'phone' => '+55 (11) 98888-7777', 'hotel' => 'Outro',
+            'gender' => 'male', 'table_id' => 2,
+        ])->assertStatus(422)->assertJsonValidationErrors('phone');
+
+        // número curto demais não passa
+        $this->postJson('/api/join', [
+            'name' => 'Curto', 'phone' => '98888', 'hotel' => 'Outro',
+            'gender' => 'male', 'table_id' => 2,
+        ])->assertStatus(422)->assertJsonValidationErrors('phone');
+
+        // e quem entrou por telefone não ocupa o índice de e-mail de ninguém —
+        // nem com o campo do outro contato indo em branco
+        $this->postJson('/api/join', [
+            'name' => 'Carla', 'email' => '', 'phone' => '11977776666', 'hotel' => 'Grand Plaza',
+            'gender' => 'female', 'table_id' => 1,
+        ])->assertCreated();
+
+        $this->assertDatabaseCount('participants', 2);
+        $this->assertDatabaseHas('participants', ['name' => 'Carla', 'email' => null]);
+    }
+
+    public function test_participant_contacts_never_leak_to_other_screens(): void
     {
         $this->postJson('/api/admin/open', [], $this->master);
         $token = $this->join('Ana', 1);
 
-        $this->assertStringNotContainsString('@', $this->getJson('/api/display')->getContent());
-        $this->assertStringNotContainsString('@', $this->getJson('/api/status', $this->auth($token))->getContent());
+        $this->postJson('/api/join', [
+            'name' => 'Bruno', 'phone' => '11988887777', 'hotel' => 'Pousada do Porto',
+            'gender' => 'male', 'table_id' => 1,
+        ])->assertCreated();
+
+        foreach (['/api/display', '/api/status'] as $endpoint) {
+            $body = $this->getJson($endpoint, $this->auth($token))->getContent();
+
+            $this->assertStringNotContainsString('@', $body);
+            $this->assertStringNotContainsString('11988887777', $body);
+            // o hotel é do painel do facilitador, não do telão
+            $this->assertStringNotContainsString('Pousada do Porto', $body);
+        }
+
+        // o painel lista o hotel — é como o facilitador identifica quem é quem
+        // numa sala de 150 —, mas o contato não trafega no poll de 1s: ele vem
+        // na gaveta da mesa, buscada sob demanda
+        $overview = $this->getJson('/api/admin/overview', $this->master)->getContent();
+        $this->assertStringContainsString('Pousada do Porto', $overview);
+        $this->assertStringNotContainsString('11988887777', $overview);
+
+        $drawer = $this->getJson('/api/admin/tables/1', $this->master)->json('participants');
+        $this->assertSame('11988887777', collect($drawer)->firstWhere('name', 'Bruno')['contact']);
+        $this->assertSame('Pousada do Porto', collect($drawer)->firstWhere('name', 'Bruno')['hotel']);
+    }
+
+    /** O hotel acompanha a pessoa nas duas listagens do painel. */
+    public function test_the_master_listings_carry_the_hotel(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $this->join('Ana', 1);
+
+        $overview = $this->getJson('/api/admin/overview', $this->master)->json();
+
+        // a listagem por mesa (a gaveta do mapa)
+        $person = collect($overview['tables'])->firstWhere('id', 1)['participants'][0];
+        $this->assertSame('Hotel Aurora', $person['hotel']);
+
+        // e o ranking individual
+        $this->assertSame('Hotel Aurora', $overview['individual_ranking'][0]['hotel']);
+
+        // no telão, nenhuma das duas
+        $this->postJson('/api/admin/end', [], $this->master);
+        $display = $this->getJson('/api/display')->json();
+
+        $this->assertArrayNotHasKey('hotel', $display['tables'][0]['participants'][0]);
+        $this->assertArrayNotHasKey('hotel', $display['individual_ranking'][0]);
+    }
+
+    /**
+     * O bloqueio é de vitrine: tira a pessoa do pódio individual e deixa tudo
+     * o mais como estava — inclusive os pontos que ela gerou para a mesa.
+     */
+    public function test_blocking_a_participant_only_removes_them_from_the_individual_ranking(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+        $bruno = $this->join('Bruno', 1);
+
+        $this->postJson('/api/admin/start', [], $this->master);
+        $question = $this->question(1, 1);
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 150)], $this->auth($ana));
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 80)], $this->auth($bruno));
+
+        $anaId = Participant::where('name', 'Ana')->value('id');
+
+        $this->postJson("/api/admin/participants/{$anaId}/block", ['blocked' => true], $this->master)
+            ->assertOk();
+
+        $overview = $this->getJson('/api/admin/overview', $this->master)->json();
+        $people = collect($overview['individual_ranking'])->keyBy('name');
+
+        // o painel ainda vê a pessoa — é de lá que se desbloqueia —, mas fora
+        // da numeração de quem está no páreo
+        $this->assertTrue($people['Ana']['blocked']);
+        $this->assertNull($people['Ana']['position']);
+        $this->assertFalse($people['Bruno']['blocked']);
+        $this->assertSame(1, $people['Bruno']['position']);
+
+        // o voto dela continua somando para a mesa e para o grupo de missão
+        $table = collect($overview['table_ranking'])->firstWhere('table_id', 1);
+        $this->assertSame(230, $table['phase_one_points']);
+        $this->assertSame(2, $table['phase_one_votes']);
+        $this->assertSame(230, collect($overview['mission_ranking'])->sum('points'));
+
+        // e o celular dela não muda de comportamento: segue votando na Fase 1,
+        // e o voto novo segue contando como o de todo mundo
+        $this->assertTrue($this->getJson('/api/status', $this->auth($ana))->json('me.has_voted'));
+
+        $this->postJson('/api/admin/reveal', [], $this->master);
+        $this->postJson('/api/admin/next', [], $this->master);
+        $this->postJson('/api/admin/start', [], $this->master);
+
+        $second = $this->question(1, 2);
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($second, 150)], $this->auth($ana))
+            ->assertCreated()
+            ->assertJsonPath('accepted', true);
+
+        $this->assertSame(
+            380,
+            collect($this->getJson('/api/admin/overview', $this->master)->json('table_ranking'))
+                ->firstWhere('table_id', 1)['phase_one_points'],
+        );
+
+        // no telão, o pódio não a conhece
+        $this->postJson('/api/admin/end', [], $this->master);
+        $public = collect($this->getJson('/api/display')->json('individual_ranking'));
+
+        $this->assertSame(['Bruno'], $public->pluck('name')->all());
+
+        // liberar devolve a pessoa ao ranking
+        $this->postJson("/api/admin/participants/{$anaId}/block", ['blocked' => false], $this->master)
+            ->assertOk();
+
+        $this->assertCount(2, $this->getJson('/api/display')->json('individual_ranking'));
+    }
+
+    /**
+     * O bloqueado não representa a mesa — e não descobre isso pela tela.
+     *
+     * O posto é a única forma de uma pessoa aparecer *falando pela mesa*, que é
+     * o que o bloqueio existe para evitar. Do celular dele, tudo parece igual
+     * ao de um colega que não assumiu: mesma tela, mesma resposta da API,
+     * mesma mensagem de erro.
+     */
+    public function test_a_blocked_participant_cannot_become_the_table_representative(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+        $bruno = $this->join('Bruno', 1);
+
+        $anaId = Participant::where('name', 'Ana')->value('id');
+        $this->postJson("/api/admin/participants/{$anaId}/block", ['blocked' => true], $this->master);
+
+        $this->postJson('/api/admin/next-phase', [], $this->master);
+        $this->postJson('/api/admin/bonus-round', [], $this->master);
+        $this->postJson('/api/admin/start', [], $this->master);
+
+        // a tela dela é a de quem não registra pela mesa — a mesma de qualquer
+        // colega depois que outra pessoa assumiu
+        $this->assertFalse($this->getJson('/api/status', $this->auth($ana))->json('me.can_answer'));
+
+        // e o botão, se ela chegar nele, responde como quem chegou em segundo
+        $this->postJson('/api/claim-representative', [], $this->auth($ana))
+            ->assertOk()
+            ->assertJsonPath('claimed', false)
+            ->assertJsonPath('representative_id', null);
+
+        $this->assertNull(EventTable::find(1)->representative_id);
+
+        $question = Question::with('options')->where('is_bonus', true)->firstOrFail();
+
+        // votar direto também não a elege — e a mensagem é a de sempre
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 150)], $this->auth($ana))
+            ->assertForbidden()
+            ->assertJsonPath('message', 'Apenas o representante da mesa responde nesta fase.');
+
+        $this->assertNull(EventTable::find(1)->representative_id);
+        $this->assertDatabaseCount('table_votes', 0);
+
+        // o posto continua livre para quem não está bloqueado
+        $this->postJson('/api/claim-representative', [], $this->auth($bruno))
+            ->assertOk()
+            ->assertJsonPath('claimed', true);
+
+        // e o facilitador não consegue nomeá-la nem pelo painel
+        $this->postJson('/api/admin/tables/1/representative', ['participant_id' => $anaId], $this->master)
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('participant_id');
+    }
+
+    /** Bloquear quem já era representante devolve o posto para a mesa. */
+    public function test_blocking_the_current_representative_releases_the_seat(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $this->join('Ana', 1);
+        $this->join('Bruno', 1);
+
+        $anaId = Participant::where('name', 'Ana')->value('id');
+
+        $this->postJson('/api/admin/tables/1/representative', ['participant_id' => $anaId], $this->master)
+            ->assertOk();
+        $this->assertSame($anaId, EventTable::find(1)->representative_id);
+
+        $this->postJson("/api/admin/participants/{$anaId}/block", ['blocked' => true], $this->master)
+            ->assertOk();
+
+        $this->assertNull(EventTable::find(1)->representative_id);
+    }
+
+    /** A Fase 1 dá 30 segundos por rodada — 20 não davam para ler o cenário. */
+    public function test_phase_one_rounds_run_for_thirty_seconds(): void
+    {
+        foreach (Question::where('phase', 1)->get() as $question) {
+            $this->assertSame(30, $question->duration);
+        }
+
+        $this->postJson('/api/admin/open', [], $this->master);
+        $this->postJson('/api/admin/start', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('timer.duration', 30);
     }
 
     public function test_layout_positions_can_be_saved_in_bulk(): void

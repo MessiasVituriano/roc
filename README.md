@@ -3,8 +3,9 @@
 Dinâmica de decisão para auditórios, conduzida ao vivo por um facilitador.
 Especificação de conteúdo e regras: [`docs/dinamica-roc.md`](docs/dinamica-roc.md).
 
-- **Fase 1 — individual.** 5 rodadas sincronizadas (~20s de voto + revelação).
-  Cada pessoa recebe uma **missão sorteada** e decide com ela.
+- **Fase 1 — individual.** 5 rodadas sincronizadas (30s de voto + revelação).
+  Cada pessoa recebe uma **missão sorteada** e decide com ela, e pode trocar a
+  escolha enquanto o cronômetro corre.
 - **Virada de fase.** O placar **por grupo de missão** vai ao telão: mesma
   régua, missões diferentes, decisões diferentes.
 - **Fase 2 — a rodada final.** Uma rodada só, **sem alternativas**: todas as
@@ -220,7 +221,10 @@ de emergência.
   alternativa escolhida, então corrigir a régua no meio do evento não reescreve
   o placar já formado.
 - **Voto único garantido pelo banco**: índice único `(participant_id,
-  question_id)` na Fase 1 e `(event_table_id, question_id)` na Fase 2.
+  question_id)` na Fase 1 e `(event_table_id, question_id)` na Fase 2. Votar de
+  novo **troca** a escolha na mesma linha (e recongela os pontos): mudar de
+  ideia faz parte da decisão, e quem fecha a linha é o fim do tempo — não o
+  primeiro toque. Na Fase 2 quem troca é o representante, pela mesa.
 - **Missões em rodízio dentro de cada mesa**, não por sorteio puro. Numa mesa de
   10, os 4 primeiros recebem missões diferentes, os 4 seguintes repetem o ciclo
   e a sobra de 2 pega duas quaisquer — sempre em ordem sorteada. É dentro da
@@ -232,8 +236,31 @@ de emergência.
   maior venceria por tamanho, não por decisão.
 - **Cronômetro no servidor.** Zerou, os votos são recusados mesmo antes de o
   facilitador encerrar.
-- **Cadastro em uma tela**: nome, e-mail (único por evento), avatar montado e
-  mesa. O e-mail fica em `$hidden` e nunca sai para o telão.
+- **Cadastro em uma tela**: nome, **e-mail ou telefone** (a pessoa escolhe o
+  tipo; um dos dois basta e cada um é único por evento), **hotel**, avatar
+  montado e mesa. O telefone é normalizado para dígitos sem código de país, para
+  `+55 (11) 99999-9999` e `11999999999` não virarem duas pessoas.
+
+  O **hotel** aparece nas duas listagens do painel — ranking individual e gaveta
+  da mesa —, porque é o que distingue dois “Ana S.” numa sala de 150. O
+  **contato** não: fica em `$hidden`, fora do poll de 1s, e só sai por
+  `GET /api/admin/tables/{id}`, buscado sob demanda. Nenhum dos dois vai ao
+  telão.
+- **Bloqueio no ranking individual.** O facilitador pode tirar alguém do pódio
+  (🚫 na gaveta da mesa ou na aba **Individual**) sem tirá-lo da dinâmica: os
+  votos continuam contando para a mesa e para o grupo de missão, e o celular da
+  pessoa não muda de comportamento. É a saída para o nome impróprio, o cadastro
+  duplicado e quem está na sala ajudando a conduzir — apagar o voto reescreveria
+  o critério de vitória da mesa por causa de um problema de vitrine.
+
+  A **única** outra coisa que o bloqueio muda é o posto de representante: quem
+  está bloqueado não assume a mesa (o botão do painel some, o `exists` da API
+  recusa, e bloquear alguém que já era representante libera o posto). O posto é
+  a única forma de uma pessoa aparecer *falando pela mesa*, que é justamente o
+  que o bloqueio evita. E é invisível do outro lado: a tela dele é a de quem não
+  registra pela mesa — a mesma de qualquer colega —, e o `POST
+  /api/claim-representative` responde `claimed: false`, indistinguível de quem
+  chegou em segundo no botão.
 
 ### Critério de vitória (4 níveis)
 
@@ -265,7 +292,7 @@ aparece como `—`: os pontos dela somam no placar, mas nunca contam como acerto
 | Método | Rota | Uso |
 |---|---|---|
 | `GET` | `/api/bootstrap` | evento + mesas para a tela de entrada |
-| `POST` | `/api/join` | cadastra o participante (nome, e-mail, mesa), devolve o token do dispositivo |
+| `POST` | `/api/join` | cadastra o participante (nome, `email` **ou** `phone`, `hotel`, mesa), devolve o token do dispositivo |
 | `GET` | `/api/status` | **poll de 1s** do participante |
 | `GET` | `/api/timer` | cronômetro isolado |
 | `POST` | `/api/vote` | registra a decisão da rodada (`option_id`) |
@@ -278,6 +305,7 @@ aparece como `—`: os pontos dela somam no placar, mas nunca contam como acerto
 | `POST` | `/api/admin/final-score` | lança a pontuação da rodada final de uma mesa (`points: null` apaga) |
 | `POST` | `/api/admin/{add-time,reset-round,layout}` | tempo extra, reset e layout |
 | `POST` | `/api/admin/tables/{id}/representative` | designa o representante da mesa |
+| `POST` | `/api/admin/participants/{id}/block` | `{"blocked": true\|false}` — tira do ranking individual sem tirar da dinâmica |
 | `GET/POST/PATCH/DELETE` | `/api/admin/tables/…` | CRUD das mesas |
 
 Autenticação: participantes usam o header `X-Participant-Token` recebido no
