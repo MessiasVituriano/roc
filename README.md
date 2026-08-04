@@ -178,6 +178,7 @@ Numa VPS de 2 GB, baixe para 16: ainda é bem mais que o pico real.
 | 3 | **⏹ Encerrar votação** | (opcional) fecha antes do tempo |
 | 4 | **📊 REVELAR no telão** | a distribuição dos votos vai ao telão (sem gabarito) |
 | 5 | **⏭ Próxima rodada** | carrega a rodada seguinte |
+| ↩ | **⏮ Rodada anterior** | volta uma rodada (revelada, se já foi jogada); na 1ª rodada da fase, volta a fase |
 | 6 | **🎭 Revelar placar por missão** | a virada de fase |
 | 7 | **➡ Ir para a Fase 2** | carrega a rodada final; a pontuação é lançada mesa a mesa no painel |
 | 8 | **🔓 Revelar gabarito + comparativo** | **o fecho:** gabarito da Fase 1 e a rodada final no telão |
@@ -299,7 +300,7 @@ aparece como `—`: os pontos dela somam no placar, mas nunca contam como acerto
 | `POST` | `/api/claim-representative` | assume o posto de representante da mesa |
 | `GET` | `/api/display` | **poll de 1s** do telão (inclui o mapa das mesas) |
 | `GET` | `/api/admin/overview` | **poll de 1s** do painel master |
-| `POST` | `/api/admin/{open,start,close,reveal,next,end}` | controle da rodada |
+| `POST` | `/api/admin/{open,start,close,reveal,next,previous,end}` | controle da rodada |
 | `POST` | `/api/admin/missions/{assign,reveal,hide}` | sorteio e virada de fase |
 | `POST` | `/api/admin/{next-phase,bonus-round}` | fase 2 e desempate |
 | `POST` | `/api/admin/final-score` | lança a pontuação da rodada final de uma mesa (`points: null` apaga) |

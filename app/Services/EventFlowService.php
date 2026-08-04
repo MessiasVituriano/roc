@@ -5,6 +5,9 @@ namespace App\Services;
 use App\Models\Event;
 use App\Models\Mission;
 use App\Models\Participant;
+use App\Models\ParticipantVote;
+use App\Models\Question;
+use App\Models\TableVote;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Collection;
@@ -239,6 +242,58 @@ class EventFlowService
         ]);
 
         return $event->refresh();
+    }
+
+    /**
+     * Rodada anterior — o desfazer de um "⏭ Próxima rodada" clicado antes da
+     * hora, e o caminho para reabrir uma rodada no telão durante a conversa.
+     *
+     * Na primeira rodada da fase, "anterior" é a última rodada da fase de trás:
+     * é o único desfazer que existe para um "➡ Ir para a Fase 2" precipitado.
+     * Nada é apagado — os votos ficam na pergunta, não na rodada corrente.
+     */
+    public function previousRound(Event $event): Event
+    {
+        $target = $event->questionFor($event->phase, $event->current_round - 1);
+
+        if (! $target && $event->phase > 1) {
+            $phase = $event->phase - 1;
+            $last = $event->questions()
+                ->where('phase', $phase)
+                ->where('is_bonus', false)
+                ->max('round');
+
+            $target = $last ? $event->questionFor($phase, $last) : null;
+        }
+
+        // já está na primeira rodada do evento: não há para onde voltar
+        if (! $target) {
+            return $event;
+        }
+
+        $event->update([
+            'phase' => $target->phase,
+            'current_round' => $target->round,
+            'current_question_id' => $target->id,
+            // Rodada que já foi votada volta **revelada**: rever a divergência
+            // da sala é a razão de voltar, e reabrir a votação para isso
+            // deixaria a rodada ser votada de novo. Sem voto, volta parada.
+            'round_status' => $this->hasVotes($target)
+                ? Event::ROUND_REVEALED
+                : Event::ROUND_IDLE,
+            'round_started_at' => null,
+            'round_ends_at' => null,
+        ]);
+
+        return $event->refresh();
+    }
+
+    /** Se a rodada já foi jogada — o que decide como ela volta ao telão. */
+    protected function hasVotes(Question $question): bool
+    {
+        return $question->isIndividual()
+            ? ParticipantVote::where('question_id', $question->id)->exists()
+            : TableVote::where('question_id', $question->id)->exists();
     }
 
     /** A virada de fase: o placar por grupo de missão vai ao telão. */

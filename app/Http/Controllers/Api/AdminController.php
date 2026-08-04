@@ -71,6 +71,12 @@ class AdminController extends Controller
         return $this->respond($this->flow->nextRound($this->requireEvent()));
     }
 
+    /** Volta uma rodada — e, na primeira da fase, volta a fase inteira. */
+    public function previous(): JsonResponse
+    {
+        return $this->respond($this->flow->previousRound($this->requireEvent()));
+    }
+
     /** Os +10s / +30s do painel: estica a rodada sem reiniciar o cronômetro. */
     public function addTime(Request $request): JsonResponse
     {

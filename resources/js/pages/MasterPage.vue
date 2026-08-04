@@ -110,6 +110,15 @@ const votingClosed = computed(() => voting.value && !votingOpen.value)
 // só dá para abrir a votação quando o evento já foi aberto e a rodada está parada
 const canStart = computed(() => !isDraft.value && !isFinished.value && idle.value)
 
+// Voltar rodada: travado durante a votação aberta, para um clique torto não
+// derrubar a rodada que está correndo — ⏹ Encerrar primeiro, e aí volta.
+const backLeavesPhase = computed(() => (event.value?.round ?? 1) === 1 && (event.value?.phase ?? 1) > 1)
+const canGoBack = computed(
+    () => !isDraft.value
+        && !votingOpen.value
+        && ((event.value?.round ?? 1) > 1 || backLeavesPhase.value),
+)
+
 // o passo do roteiro em que estamos — ilumina o stepper e o botão recomendado
 const STEPS = [
     { key: 'open', label: 'Abrir' },
@@ -176,6 +185,23 @@ async function action(name, path, body) {
     } finally {
         busy.value = ''
     }
+}
+
+/**
+ * Voltar uma rodada. Na primeira da fase o passo é maior — volta a fase
+ * inteira —, e aí vale perguntar antes: é o desfazer de um "Ir para a Fase 2"
+ * clicado sem querer, não um passo de roteiro.
+ */
+async function previousRound() {
+    if (backLeavesPhase.value) {
+        const ok = window.confirm(
+            `Voltar para a Fase ${(event.value?.phase ?? 2) - 1}?\n\nO evento retoma na última rodada dela. Nenhum voto é apagado.`,
+        )
+
+        if (!ok) return
+    }
+
+    await action('previous', '/admin/previous')
 }
 
 // destrutivo: pede confirmação antes de apagar tudo e recomeçar do zero
@@ -381,6 +407,23 @@ async function saveLayout() {
                             @click="action('next', '/admin/next')"
                         >
                             ⏭ Próxima rodada
+                        </button>
+
+                        <!--
+                            Voltar. Discreto de propósito: é conserto de clique
+                            torto e recurso de narrativa (rever uma rodada no
+                            telão durante a conversa), não passo do roteiro.
+                            A rodada que já foi jogada volta revelada.
+                        -->
+                        <button
+                            class="w-full rounded-xl px-4 py-2 text-xs font-semibold text-slate-400 hover:text-fuchsia-300 transition disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-slate-400"
+                            :disabled="!canGoBack || busy === 'previous'"
+                            :title="backLeavesPhase
+                                ? 'Volta para a última rodada da fase anterior'
+                                : 'Volta para a rodada anterior — nenhum voto é apagado'"
+                            @click="previousRound"
+                        >
+                            ⏮ {{ backLeavesPhase ? `Voltar para a Fase ${(event?.phase ?? 2) - 1}` : 'Rodada anterior' }}
                         </button>
 
                         <!-- corrigir uma revelação precoce -->
