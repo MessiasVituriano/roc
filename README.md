@@ -177,10 +177,10 @@ Numa VPS de 2 GB, baixe para 16: ainda é bem mais que o pico real.
 | 2 | **▶ Abrir votação da rodada** | cronômetro corre, votos são aceitos |
 | 3 | **⏹ Encerrar votação** | (opcional) fecha antes do tempo |
 | 4 | **📊 REVELAR no telão** | a distribuição dos votos vai ao telão (sem gabarito) |
-| 5 | **⏭ Próxima rodada** | carrega a rodada seguinte |
+| 5 | **⏭ Próxima rodada** | carrega a rodada seguinte — revelar não é pré-requisito |
 | ↩ | **⏮ Rodada anterior** | volta uma rodada (revelada, se já foi jogada); na 1ª rodada da fase, volta a fase |
 | 6 | **🎭 Revelar placar por missão** | a virada de fase |
-| 7 | **➡ Ir para a Fase 2** | carrega a rodada final; a pontuação é lançada mesa a mesa no painel |
+| 7 | **➡ Ir para a Fase 2** | carrega a 1ª das cinco rodadas de mesa; da 6ª em diante a pontuação é lançada à mão no painel |
 | 8 | **🔓 Revelar gabarito + comparativo** | **o fecho:** gabarito da Fase 1 e a rodada final no telão |
 | 9 | **🎲 Rodada de desempate** | só se o empate sobreviver aos 3 primeiros critérios |
 | 10 | **🏁 Finalizar evento** | telão mostra a mesa vencedora |
@@ -189,6 +189,17 @@ Os passos **6** e **8** são os dois momentos deliberados do facilitador — o
 telão só muda quando ele clica. O passo 8 é separado do 10 de propósito:
 encerrar joga os celulares na tela de "obrigado", enquanto revelar o gabarito
 mantém a sala inteira olhando para o telão.
+
+**Avançar e voltar são livres dentro do roteiro.** O passo 4 é o caminho
+normal, não uma condição: **⏭** segue com a rodada parada (pular uma rodada que
+não vai ser jogada) ou com a votação fechada (a conversa já resolveu antes do
+telão) — e aí o botão se anuncia como *(sem revelar)*, sem o destaque que ele
+tem depois da revelação. Nenhum dos dois apaga voto: os votos moram na pergunta,
+então **⏮** traz a rodada de volta — **revelada**, se ela chegou a ser jogada.
+
+Os dois ficam travados enquanto a votação está **aberta**: um clique torto não
+derruba a rodada que está correndo. **⏹ Encerrar** primeiro, e aí os dois
+liberam.
 
 `+10s` / `+30s` estendem a rodada. **🔄 Recarregar a rodada** é a saída de
 emergência: apaga os votos da rodada corrente e devolve o evento ao ponto de

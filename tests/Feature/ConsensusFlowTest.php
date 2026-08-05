@@ -853,6 +853,61 @@ class ConsensusFlowTest extends TestCase
     }
 
     /**
+     * Seguir sem revelar: a rodada que a conversa já resolveu antes do telão.
+     * Nada é apagado, e o voltar traz a rodada de volta — revelada, porque foi
+     * jogada. É o que sustenta o botão continuar clicável fora da revelação.
+     */
+    public function test_the_master_can_move_on_without_revealing_the_round(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+
+        $this->postJson('/api/admin/start', [], $this->master);
+        $this->postJson('/api/vote', [
+            'option_id' => $this->optionWorth($this->question(1, 1), 150),
+        ], $this->auth($ana));
+
+        // sem passar pela revelação: a rodada 2 sobe parada, pronta para abrir
+        $this->postJson('/api/admin/next', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round', 2)
+            ->assertJsonPath('event.round_status', 'idle')
+            ->assertJsonPath('event.voting_open', false);
+
+        // o voto continua onde estava — seguir sem revelar não apaga nada
+        $this->assertDatabaseCount('participant_votes', 1);
+
+        $this->postJson('/api/admin/previous', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round', 1)
+            ->assertJsonPath('event.round_status', 'revealed')
+            ->assertJsonPath('results.total_votes', 1);
+    }
+
+    /** Pular uma rodada que nunca foi aberta é o mesmo caminho, sem voto. */
+    public function test_an_unplayed_round_can_be_skipped(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+
+        $this->postJson('/api/admin/next', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round', 2)
+            ->assertJsonPath('event.round_status', 'idle')
+            ->assertJsonPath('question.round', 2);
+
+        // e a rodada pulada continua disponível para ser aberta na volta
+        $this->postJson('/api/admin/previous', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round', 1)
+            ->assertJsonPath('event.round_status', 'idle');
+
+        $this->postJson('/api/admin/start', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round', 1)
+            ->assertJsonPath('event.round_status', 'voting');
+    }
+
+    /**
      * Voltar rodada: o desfazer de um "próxima" clicado antes da hora, e o
      * caminho para rever uma rodada no telão durante a conversa.
      */

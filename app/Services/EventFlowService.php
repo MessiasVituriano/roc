@@ -218,6 +218,11 @@ class EventFlowService
     /**
      * Próxima rodada. No fim da Fase 1 apenas para: a virada de fase (revelar
      * o placar por missão) é um passo deliberado do facilitador.
+     *
+     * Revelar não é pré-requisito: o roteiro passa pela revelação, mas o vivo
+     * tem a rodada que não vai ser jogada e a que a conversa já resolveu antes
+     * do telão. Seguir sem revelar não apaga nada — os votos moram na pergunta,
+     * e `previousRound()` traz a rodada de volta revelada se ela foi jogada.
      */
     public function nextRound(Event $event): Event
     {
