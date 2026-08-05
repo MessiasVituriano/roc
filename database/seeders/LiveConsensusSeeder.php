@@ -23,18 +23,22 @@ class LiveConsensusSeeder extends Seeder
     /**
      * Tempo de cada uma das cinco rodadas da Fase 1.
      *
-     * Trinta segundos: dez para ler o cenário do hotel, o resto para decidir —
-     * e para trocar de ideia, já que a escolha pode ser mudada enquanto o
-     * cronômetro corre. O facilitador ainda estica pelo painel (+10s / +30s).
+     * Um minuto: o suficiente para ler o cenário do hotel sem pressa, pesar as
+     * quatro alternativas e ainda trocar de ideia — a escolha pode ser mudada
+     * enquanto o cronômetro corre. O facilitador corta antes com ⏹ Encerrar
+     * quando a sala já fechou, e estica com +10s / +30s quando não fechou.
      */
-    public const PHASE_ONE_DURATION = 30;
+    public const PHASE_ONE_DURATION = 60;
 
     /**
-     * Tempo da rodada final. Bem maior que o da Fase 1 porque a mesa precisa
-     * discutir a missão inteira antes de fechar uma posição. O facilitador
-     * ainda sobrescreve pelo painel.
+     * Tempo das rodadas da Fase 2 — a rodada final e o desempate.
+     *
+     * O dobro da Fase 1 porque aqui a mesa precisa conversar antes de decidir:
+     * não é uma escolha individual, é um consenso a construir entre quatro
+     * missões que se contradizem. Vale para as duas perguntas da fase; o
+     * facilitador ajusta ao vivo pelos mesmos controles.
      */
-    public const FINAL_ROUND_DURATION = 300;
+    public const PHASE_TWO_DURATION = 120;
 
     protected array $missions = [
         ['diaria_media', 'Diária Média', 'Seu diretor financeiro pediu que você preservasse a diária média.', '💰', '#c9922e'],
@@ -133,11 +137,58 @@ class LiveConsensusSeeder extends Seeder
         };
     }
 
+    /**
+     * O roteiro inteiro, na ordem em que o facilitador o percorre: os cinco
+     * cenários individuais, os mesmos cinco em mesa, a rodada final e o
+     * desempate.
+     */
     protected function rounds(): array
+    {
+        $scenarios = $this->scenarios();
+
+        return [
+            // Fase 1 — cada pessoa decide sozinha, com a missão que sorteou.
+            ...array_map(
+                fn (array $scenario, int $i) => $scenario + [
+                    'phase' => 1,
+                    'round' => $i + 1,
+                    'mode' => Question::MODE_INDIVIDUAL,
+                    'duration' => self::PHASE_ONE_DURATION,
+                ],
+                $scenarios,
+                array_keys($scenarios),
+            ),
+
+            // Fase 2 — os mesmos cinco cenários, agora decididos pela mesa.
+            ...array_map(
+                fn (array $scenario, int $i) => $scenario + [
+                    'phase' => 2,
+                    'round' => $i + 1,
+                    'mode' => Question::MODE_CONSENSUS,
+                    'duration' => self::PHASE_TWO_DURATION,
+                ],
+                $scenarios,
+                array_keys($scenarios),
+            ),
+
+            ...$this->closingRounds(),
+        ];
+    }
+
+    /**
+     * Os cinco cenários do PDF, sem fase: cada um é jogado **duas vezes** — na
+     * Fase 1 por cada pessoa, puxada pela missão que sorteou, e na Fase 2 pela
+     * mesa inteira, em consenso.
+     *
+     * A simetria é o ponto. Mesma pergunta, mesma régua, decisor diferente: é
+     * o que transforma o comparativo do fecho numa medida em vez de uma
+     * impressão — a mesa não é comparada com outra coisa, é comparada com as
+     * mesmas pessoas decidindo sozinhas meia hora antes.
+     */
+    protected function scenarios(): array
     {
         return [
             [
-                'phase' => 1, 'round' => 1, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => self::PHASE_ONE_DURATION,
                 'label' => 'TARIFA & OCUPAÇÃO',
                 'title' => 'Como você responde à queda no ritmo de reservas?',
                 'context' => 'Terça-feira, faltam 9 dias para o feriado. Forecast: ocupação 68% (meta 85%). Dois concorrentes diretos já anunciaram promoções para o mesmo período, e o ritmo de reservas está 12% abaixo do mesmo feriado do ano passado.',
@@ -150,7 +201,6 @@ class LiveConsensusSeeder extends Seeder
                 ],
             ],
             [
-                'phase' => 1, 'round' => 2, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => self::PHASE_ONE_DURATION,
                 'label' => 'GRUPO & CONGRESSO',
                 'title' => 'Como você organiza a demanda do congresso?',
                 'context' => 'Congresso de 3 dias confirmado na cidade — demanda potencial de ~40 quartos. O hotel já tem 12 quartos de grupo confirmados para a mesma data, 10% abaixo da meta de diária.',
@@ -163,7 +213,6 @@ class LiveConsensusSeeder extends Seeder
                 ],
             ],
             [
-                'phase' => 1, 'round' => 3, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => self::PHASE_ONE_DURATION,
                 'label' => 'INVESTIMENTO EM MARKETING',
                 'title' => 'Em qual campanha você investe o orçamento aprovado?',
                 'context' => 'A performance de mídia paga do hotel está 15% abaixo da meta mensal, e a diretoria pediu um resultado visível em 48h. Orçamento aprovado para apenas 1 campanha.',
@@ -176,7 +225,6 @@ class LiveConsensusSeeder extends Seeder
                 ],
             ],
             [
-                'phase' => 1, 'round' => 4, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => self::PHASE_ONE_DURATION,
                 'label' => 'NEGOCIAÇÃO DE GRUPOS',
                 'title' => 'Como você responde ao pedido do grupo de 60 quartos?',
                 'context' => 'Hotel de 220 apartamentos. Grupo de 60 quartos solicitado a R$ 520 (meta de diária média é R$ 650). Forecast individual (reservas em carteira) indica 71% de ocupação na data — restam 64 quartos livres, com ritmo de reservas forte nos últimos 10 dias e diária média projetada de R$ 670 para a demanda individual remanescente.',
@@ -189,7 +237,6 @@ class LiveConsensusSeeder extends Seeder
                 ],
             ],
             [
-                'phase' => 1, 'round' => 5, 'mode' => Question::MODE_INDIVIDUAL, 'duration' => self::PHASE_ONE_DURATION,
                 'label' => 'DISTRIBUIÇÃO & MÍDIA PAGA',
                 'title' => 'O que você faz com o aumento de CPC proposto?',
                 'context' => 'O canal direto responde hoje por 22% das reservas, abaixo da meta de 30% definida pela diretoria. O Google Hotel Ads oferece posição de destaque nos resultados de busca por 30 dias, mediante aumento do CPC (custo por clique) em 40%.',
@@ -202,19 +249,28 @@ class LiveConsensusSeeder extends Seeder
                 ],
             ],
 
-            // ---------------------------------------------------------------
-            // Fase 2 — a rodada final, e só ela.
-            //
-            // Diferente das rodadas 1 a 5, não é uma escolha entre alternativas
-            // fixas: todas as mesas recebem a mesma missão final — a que funde
-            // as 4 missões individuais da Fase 1 num objetivo só — e decidem
-            // livremente por consenso. Sem alternativas não há régua a aplicar,
-            // então a pontuação é lançada mesa a mesa pelo facilitador
-            // (`manual_scoring`), no painel.
-            // ---------------------------------------------------------------
+        ];
+    }
+
+    /**
+     * O que fecha a Fase 2 depois dos cinco cenários de mesa: a rodada final e
+     * o desempate.
+     *
+     * A rodada final é o clímax e a única pergunta do evento sem alternativas —
+     * todas as mesas recebem a mesma missão, a que funde as 4 missões
+     * individuais da Fase 1 num objetivo só, e decidem livremente. Sem
+     * alternativa não há régua a aplicar, então a pontuação é lançada mesa a
+     * mesa pelo facilitador (`manual_scoring`).
+     *
+     * Ela vem **depois** dos cinco: chegar nela tendo acabado de rejogar em
+     * mesa o que cada um jogou sozinho é o que dá peso à decisão.
+     */
+    protected function closingRounds(): array
+    {
+        return [
             [
-                'phase' => 2, 'round' => 1, 'mode' => Question::MODE_CONSENSUS,
-                'duration' => self::FINAL_ROUND_DURATION,
+                'phase' => 2, 'round' => 6, 'mode' => Question::MODE_CONSENSUS,
+                'duration' => self::PHASE_TWO_DURATION,
                 'manual_scoring' => true,
                 'label' => 'RODADA FINAL',
                 'title' => 'A missão final da mesa',
@@ -224,16 +280,17 @@ class LiveConsensusSeeder extends Seeder
             ],
 
             // ---------------------------------------------------------------
-            // O desempate fica na rodada 2 da Fase 2 — depois da rodada final,
-            // e fora da contagem (`is_bonus`), então "próxima rodada" nunca cai
-            // nele. Só o botão de desempate do painel o carrega.
+            // O desempate fica na última rodada da Fase 2 — depois da rodada
+            // final, e fora da contagem (`is_bonus`), então "próxima rodada"
+            // nunca cai nele. Só o botão de desempate do painel o carrega.
             // ---------------------------------------------------------------
             [
-                'phase' => 2, 'round' => 2, 'mode' => Question::MODE_CONSENSUS, 'duration' => 60,
+                'phase' => 2, 'round' => 7, 'mode' => Question::MODE_CONSENSUS,
+                'duration' => self::PHASE_TWO_DURATION,
                 'is_bonus' => true,
                 'label' => 'DESEMPATE',
                 'title' => '[PREENCHER] Pergunta bônus de desempate',
-                'context' => '[PREENCHER com a pergunta bônus. Usada apenas se o empate sobreviver aos três primeiros critérios de vitória. 60 segundos, consenso da mesa.]',
+                'context' => '[PREENCHER com a pergunta bônus. Usada apenas se o empate sobreviver aos três primeiros critérios de vitória. 120 segundos, consenso da mesa.]',
                 'options' => [
                     ['[PREENCHER] Alternativa A', '[PREENCHER] Efeito da decisão A.', -50],
                     ['[PREENCHER] Alternativa B', '[PREENCHER] Efeito da decisão B.', 0],

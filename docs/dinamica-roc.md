@@ -71,23 +71,29 @@ justamente o conflito **dentro da mesa** que a rodada final precisa resolver.
   uma régua por alternativa.
 - Gera **pontuação de mesa**, separada da soma individual dos membros.
 
-### Roteiro (~30 min)
+### Roteiro (~45 min)
 
 | Etapa | Tempo | Observação |
 |---|---|---|
 | Abertura e contexto | 1 min | facilitador apresenta o cenário do hotel |
-| Fase 1 — 5 rodadas individuais | 6 min | **30s de votação + ~20s de revelação por rodada** |
+| Fase 1 — 5 rodadas individuais | 7 min | **60s de votação + ~20s de revelação por rodada** |
 | Virada de fase (revelação por grupo de missão) | 2 min | o viés aparece no placar |
-| Fase 2 — rodada final por mesa | 6 min | **~5 min de consenso + lançamento da pontuação** |
-| **O comparativo** (gabarito + rodada final) | 3 min | a prova numérica do objetivo 2 |
+| Fase 2 — os mesmos 5 cenários, em mesa | 12 min | **120s de consenso + ~20s de revelação por rodada** |
+| Fase 2 — rodada final por mesa | 4 min | **2 min de consenso + lançamento da pontuação** |
+| **O comparativo** (gabarito + confronto das fases) | 3 min | a prova numérica do objetivo 2 |
 | Placar final e desempate | 2 min | critério em 4 níveis |
 | Mensagem de fechamento | 3 min | |
 
-Total ~23 min + margem. O roteiro pressupõe facilitador experiente.
+Total ~34 min + margem. O roteiro pressupõe facilitador experiente.
+
+> **A Fase 2 é a etapa mais longa.** São seis rodadas, não uma. Se o tempo
+> apertar, o corte natural é o relógio de mesa (`PHASE_TWO_DURATION` para 90s
+> economiza ~2,5 min) ou **⏭ Próxima rodada** sem revelar nos cenários em que a
+> mesa fechou rápido — o gabarito de todos eles sai junto no comparativo.
 
 > Para ajustar os relógios antes de semear: `LiveConsensusSeeder::PHASE_ONE_DURATION`
-> (padrão 30s, cada rodada da Fase 1) e `LiveConsensusSeeder::FINAL_ROUND_DURATION`
-> (padrão 300s). Ao vivo, **⏹ Encerrar** corta a rodada a qualquer momento e
+> (padrão 60s, cada rodada da Fase 1) e `LiveConsensusSeeder::PHASE_TWO_DURATION`
+> (padrão 120s, todas as rodadas da Fase 2). Ao vivo, **⏹ Encerrar** corta a rodada a qualquer momento e
 > **+10s / +30s** a estica. Dentro da rodada aberta, cada pessoa pode trocar a
 > alternativa quantas vezes quiser — vale a última.
 
@@ -167,11 +173,32 @@ Cada alternativa vale pontos fixos. Régua usada em todas as rodadas:
 
 *Viés:* Ocupação tende à A; Diária Média tende à D.
 
+### Fase 2 — os mesmos 5 cenários, em mesa
+> **Decisão de implementação — diverge do PDF.** O PDF define a Fase 2 como
+> **uma rodada só**. No sistema ela rejoga os **mesmos cinco cenários** acima,
+> agora decididos por consenso pela mesa (`mode = consensus`), e só então chega
+> à rodada final.
+>
+> O motivo é o objetivo 2 da dinâmica. Com uma rodada aberta de um lado e cinco
+> escolhas com régua do outro, o comparativo do fecho compara coisas diferentes
+> — a decisão coletiva não é medida contra a individual, é medida contra outra
+> pergunta. Rejogando os mesmos cenários, o confronto vira **a mesma pergunta,
+> a mesma régua, decisor diferente**: dá para dizer em acerto e em pontos
+> quanto a mesa rendeu a mais (ou a menos) que as mesmas pessoas sozinhas meia
+> hora antes. É a prova numérica que a dinâmica promete.
+>
+> O custo é tempo: a Fase 2 passa de ~4 para ~16 min. Quem precisar da versão
+> curta do PDF apaga o bloco de espelho em `LiveConsensusSeeder::rounds()`.
+
+Cada mesa responde com **um representante** registrando por todos, na mesma
+régua (+150 / +80 / 0 / −50) das rodadas individuais.
+
 ### Rodada final — Fase 2 (mesa)
-Diferente das rodadas 1 a 5, a rodada final **não é uma escolha entre 4
+Depois dos cinco cenários, a rodada final **não é uma escolha entre 4
 alternativas fixas**. Todas as mesas recebem a mesma missão final — a que une as
 4 missões individuais da Fase 1 em um único objetivo — e decidem livremente por
-consenso.
+consenso. Chegar nela tendo acabado de rejogar em mesa o que cada um jogou
+sozinho é o que dá peso à decisão.
 
 > **Texto da missão final (igual para todas as mesas):**
 > *“Maximizar o resultado total do hotel — pensando ao mesmo tempo em diária
@@ -181,11 +208,14 @@ consenso.
 A pontuação dessa rodada é **lançada manualmente pelo facilitador no painel**,
 mesa a mesa, e não calculada por alternativa. No sistema, a pergunta tem
 `manual_scoring = true` e o lançamento grava uma linha em `table_votes` sem
-`option_id` — soma no placar da Fase 2 como qualquer decisão de mesa, mas nunca
-conta como acerto: não havia régua para acertar.
+`option_id` — soma nos **pontos** da Fase 2 como qualquer decisão de mesa, mas
+fica fora do **acerto**, das **médias** e da **evolução**: não havia régua para
+acertar, e a escala do lançamento é do facilitador. Misturá-la nas médias faria
+o comparativo medir duas réguas ao mesmo tempo.
 
 ### Desempate — rodada bônus
-Pergunta bônus única, decidida por consenso da mesa em 60 segundos. **O PDF não
+Pergunta bônus única, decidida por consenso da mesa em 120 segundos — o mesmo
+relógio da rodada final. **O PDF não
 especifica o conteúdo dessa pergunta.**
 
 ## 5. Critério de vitória (4 níveis, anunciado antes de começar)
@@ -193,7 +223,7 @@ especifica o conteúdo dessa pergunta.**
 1. **Maior Valor Gerado Total** — pontuação Fase 1 (individual) + Fase 2 (mesa)
 2. **Maior pontuação na Fase 2** — em caso de empate no total
 3. **Maior evolução Fase 1 → Fase 2** — premia quem mais aprendeu em tempo real
-4. **Rodada de desempate ao vivo** — pergunta bônus, consenso da mesa, 60s
+4. **Rodada de desempate ao vivo** — pergunta bônus, consenso da mesa, 120s
 
 > **Decisão de implementação — diverge do PDF.** O PDF pede “placar sempre
 > visível no telão em tempo real”. Pontuação ao vivo é gabarito ao vivo: numa
@@ -235,7 +265,7 @@ Sem app: acesso por link ou QR code nas duas fases.
 | Tema | PDF | Sistema hoje |
 |---|---|---|
 | Fase 1 | **5 rodadas sincronizadas**, ~20s de voto + 20s de revelação cada | 20 perguntas no ritmo de cada um, cronômetro global |
-| Fase 2 | **1 rodada** por mesa | 20 perguntas por mesa |
+| Fase 2 | **1 rodada** por mesa | os mesmos 5 cenários em mesa + a rodada final ([diverge](#fase-2--os-mesmos-5-cenários-em-mesa)) |
 | Missões | 4 missões sorteadas, fixas, geram o viés | **não existe** |
 | Pontos | +150 / +80 / 0 / −50 por alternativa | **não existe** — só distribuição de votos |
 | Placar | 3 camadas + critério de vitória em 4 níveis | **não existe** |
