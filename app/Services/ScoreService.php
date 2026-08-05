@@ -75,6 +75,28 @@ class ScoreService
     }
 
     /**
+     * Média de pontos por decisão — a unidade de toda comparação entre as
+     * fases (o comparativo do telão e a evolução do critério 3).
+     *
+     * Conta só as decisões que tinham **régua**. A Fase 2 é feita dos cinco
+     * cenários da Fase 1 mais a rodada final, e a final é pontuada à mão, numa
+     * escala que é do facilitador: misturá-la aqui faria a comparação medir
+     * duas réguas ao mesmo tempo, e um lançamento generoso viraria "evolução".
+     * Nos pontos e no total ela entra normalmente — lá ela é placar, não medida.
+     *
+     * Sem nenhuma decisão com régua, cai para o total: é o caso de um evento
+     * cuja Fase 2 é só a rodada final, em que os pontos são tudo o que existe.
+     */
+    protected function averagePerDecision(int $scoredPoints, int $scoredVotes, int $points, int $votes): float
+    {
+        if ($scoredVotes > 0) {
+            return $scoredPoints / $scoredVotes;
+        }
+
+        return $votes > 0 ? $points / $votes : 0.0;
+    }
+
+    /**
      * A rodada final não tem alternativas: o facilitador lança os pontos e a
      * linha do voto fica sem `option_id`. Acerto só existe onde havia régua,
      * então contar essas linhas como erro seria inventar um erro que ninguém
@@ -274,7 +296,7 @@ class ScoreService
             ->join('questions', 'questions.id', '=', 'table_votes.question_id')
             ->where('questions.event_id', $event->id)
             ->where('questions.phase', 2)
-            ->selectRaw('table_votes.event_table_id, sum(table_votes.points) as total, count(*) as votes, count(table_votes.option_id) as option_votes')
+            ->selectRaw('table_votes.event_table_id, sum(table_votes.points) as total, count(*) as votes, count(table_votes.option_id) as option_votes, sum(case when table_votes.option_id is null then 0 else table_votes.points end) as option_points')
             ->groupBy('table_votes.event_table_id')
             ->get()
             ->keyBy('event_table_id');
@@ -305,10 +327,18 @@ class ScoreService
                     (int) ($two->option_votes ?? 0),
                 );
 
-                // Evolução: quanto a decisão conjunta rendeu por rodada frente
-                // ao que os membros vinham rendendo por rodada sozinhos.
-                $oneAverage = $oneVotes > 0 ? $onePoints / $oneVotes : 0.0;
-                $twoAverage = $twoVotes > 0 ? $twoPoints / $twoVotes : 0.0;
+                // Evolução: quanto a mesa rendeu por decisão frente ao que os
+                // membros vinham rendendo por decisão sozinhos. Como as duas
+                // fases jogam os mesmos cinco cenários, é literalmente a mesma
+                // pergunta dos dois lados — e a rodada final fica de fora dos
+                // dois, pelo motivo em `averagePerDecision()`.
+                $oneAverage = $this->averagePerDecision($onePoints, $oneVotes, $onePoints, $oneVotes);
+                $twoAverage = $this->averagePerDecision(
+                    (int) ($two->option_points ?? 0),
+                    (int) ($two->option_votes ?? 0),
+                    $twoPoints,
+                    $twoVotes,
+                );
                 $delta = $twoAverage - $oneAverage;
 
                 return [
@@ -378,10 +408,14 @@ class ScoreService
     /**
      * O comparativo entre as fases — a tese da dinâmica em números.
      *
-     * As duas fases não fazem a mesma pergunta: a Fase 1 são cinco escolhas com
-     * régua e a Fase 2 é uma missão aberta, pontuada pelo facilitador. Acerto em
-     * percentual, portanto, só existe do lado individual — o que dá para
-     * comparar entre as duas é **valor gerado por decisão** (`average_delta`).
+     * As duas fases fazem **as mesmas cinco perguntas**: a Fase 1 com cada um
+     * decidindo sozinho, puxado pela missão que sorteou, e a Fase 2 com a mesa
+     * decidindo junto. É essa simetria que torna o confronto uma medida — os
+     * dois lados são comparáveis tanto em **acerto** quanto em **valor gerado
+     * por decisão**, e não há efeito de "pergunta mais fácil" a descontar.
+     *
+     * A rodada final entra nos pontos e fica fora das médias e do acerto: ela é
+     * a única sem alternativa, e o motivo está em `averagePerDecision()`.
      */
     public function phaseComparison(Event $event): array
     {
@@ -441,7 +475,7 @@ class ScoreService
             ->where('questions.phase', $phase);
 
         $row = $base()
-            ->selectRaw("count(*) as votes, count({$table}.option_id) as option_votes, coalesce(sum({$table}.points), 0) as points")
+            ->selectRaw("count(*) as votes, count({$table}.option_id) as option_votes, coalesce(sum({$table}.points), 0) as points, coalesce(sum(case when {$table}.option_id is null then 0 else {$table}.points end), 0) as option_points")
             ->first();
 
         $votes = (int) ($row->votes ?? 0);
@@ -459,7 +493,12 @@ class ScoreService
             'correct' => $correct,
             'accuracy' => $accuracy,
             'points' => $points,
-            'average' => $votes > 0 ? round($points / $votes, 1) : 0.0,
+            'average' => round($this->averagePerDecision(
+                (int) ($row->option_points ?? 0),
+                (int) ($row->option_votes ?? 0),
+                $points,
+                $votes,
+            ), 1),
         ];
     }
 

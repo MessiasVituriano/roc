@@ -119,6 +119,13 @@ const canGoBack = computed(
         && ((event.value?.round ?? 1) > 1 || backLeavesPhase.value),
 )
 
+// Avançar não exige revelar: dá para pular uma rodada que não vai ser jogada e
+// para seguir com a votação fechada quando a conversa já resolveu a rodada. A
+// trava é a mesma do voltar — votação aberta não é atropelada por um clique.
+const canGoNext = computed(() => !isDraft.value && !isFinished.value && !votingOpen.value)
+// nada revelado no telão é o caso em que o clique pula a revelação
+const nextSkipsReveal = computed(() => canGoNext.value && !revealed.value)
+
 // o passo do roteiro em que estamos — ilumina o stepper e o botão recomendado
 const STEPS = [
     { key: 'open', label: 'Abrir' },
@@ -414,14 +421,23 @@ async function saveLayout() {
                             </button>
                         </div>
 
-                        <!-- depois de revelar: seguir para a próxima rodada -->
+                        <!--
+                            Seguir para a próxima rodada. Depois de revelar é o
+                            passo do roteiro — e é aí que ele pisca. Sem revelar
+                            continua clicável, só sem destaque: é o pulo de uma
+                            rodada que não vai ser jogada e o atalho de quando a
+                            conversa já resolveu a rodada no fechamento.
+                        -->
                         <button
                             class="w-full rounded-2xl px-4 py-4 font-black text-white text-lg bg-gradient-to-r from-fuchsia-500 to-purple-500 hover:brightness-110 active:scale-95 transition disabled:opacity-30 disabled:grayscale disabled:cursor-not-allowed"
                             :class="revealed && busy !== 'next' ? 'ring-2 ring-white/40 shadow-lg animate-attn' : ''"
-                            :disabled="!revealed || busy === 'next'"
+                            :disabled="!canGoNext || busy === 'next'"
+                            :title="nextSkipsReveal
+                                ? 'Segue sem revelar esta rodada no telão — nenhum voto é apagado, e ⏮ traz ela de volta'
+                                : 'Carrega a rodada seguinte'"
                             @click="action('next', '/admin/next')"
                         >
-                            ⏭ Próxima rodada
+                            ⏭ Próxima rodada{{ nextSkipsReveal ? ' (sem revelar)' : '' }}
                         </button>
 
                         <!--

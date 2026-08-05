@@ -53,6 +53,35 @@ class ConsensusFlowTest extends TestCase
         return $question->options->firstWhere('points', $points)->id;
     }
 
+    /**
+     * Entra na Fase 2 e para na rodada 1 — o primeiro dos cinco cenários,
+     * agora decidido pela mesa.
+     */
+    protected function startPhaseTwo(int $round = 1): Question
+    {
+        $this->postJson('/api/admin/next-phase', [], $this->master);
+
+        for ($i = 1; $i < $round; $i++) {
+            $this->postJson('/api/admin/next', [], $this->master);
+        }
+
+        $this->postJson('/api/admin/start', [], $this->master);
+
+        return $this->question(2, $round);
+    }
+
+    /** A rodada final é a 6ª da Fase 2: vem depois dos cinco cenários de mesa. */
+    protected function goToFinalRound(): Question
+    {
+        $this->postJson('/api/admin/next-phase', [], $this->master);
+
+        for ($i = 1; $i < 6; $i++) {
+            $this->postJson('/api/admin/next', [], $this->master);
+        }
+
+        return $this->question(2, 6);
+    }
+
     /** A rodada final é pontuada à mão: o placar dela passa por aqui. */
     protected function scoreTable(int $tableId, ?int $points): TestResponse
     {
@@ -612,6 +641,187 @@ class ConsensusFlowTest extends TestCase
         $this->assertDatabaseHas('table_votes', ['points' => 150]);
     }
 
+    /** Abre a Fase 2 na rodada de desempate, que é onde o posto é exercido. */
+    protected function startBonusRound(): Question
+    {
+        $this->postJson('/api/admin/next-phase', [], $this->master);
+        $this->postJson('/api/admin/bonus-round', [], $this->master);
+        $this->postJson('/api/admin/start', [], $this->master);
+
+        return Question::with('options')->where('is_bonus', true)->firstOrFail();
+    }
+
+    /**
+     * O botão "Sou eu 🙋": o primeiro toque leva o posto, e o update condicional
+     * é o que decide — não a aplicação. O segundo recebe a mesma resposta que
+     * receberia se tivesse sido barrado por qualquer outro motivo.
+     *
+     * As duas telas saem daqui: quem assumiu vê o selo no cabeçalho, quem não
+     * assumiu vê o nome de quem registra pela mesa.
+     */
+    public function test_the_first_to_claim_takes_the_representative_seat(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+        $bruno = $this->join('Bruno', 1);
+        $anaId = Participant::where('name', 'Ana')->value('id');
+
+        $this->startBonusRound();
+
+        // com o posto vazio, os dois celulares mostram o botão de assumir
+        foreach ([$ana, $bruno] as $token) {
+            $status = $this->getJson('/api/status', $this->auth($token))->json();
+            $this->assertTrue($status['me']['can_answer']);
+            $this->assertNull($status['my_table']['representative_id']);
+        }
+
+        $this->postJson('/api/claim-representative', [], $this->auth($ana))
+            ->assertOk()
+            ->assertJsonPath('claimed', true)
+            ->assertJsonPath('representative_id', $anaId)
+            ->assertJsonPath('status.me.is_representative', true)
+            ->assertJsonPath('status.me.can_answer', true);
+
+        // o segundo toque não desloca ninguém — e devolve o posto de quem venceu
+        $this->postJson('/api/claim-representative', [], $this->auth($bruno))
+            ->assertOk()
+            ->assertJsonPath('claimed', false)
+            ->assertJsonPath('representative_id', $anaId)
+            ->assertJsonPath('status.me.is_representative', false)
+            ->assertJsonPath('status.me.can_answer', false);
+
+        // e a tela dele passa a nomear quem registra pela mesa
+        $this->getJson('/api/status', $this->auth($bruno))
+            ->assertJsonPath('my_table.representative_id', $anaId)
+            ->assertJsonPath('my_table.representative_name', 'Ana');
+
+        $this->assertSame($anaId, EventTable::find(1)->representative_id);
+    }
+
+    /** O posto é de cada mesa: assumir a 1 não encosta na 2. */
+    public function test_the_representative_seat_is_held_per_table(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+        $carla = $this->join('Carla', 2);
+
+        $question = $this->startBonusRound();
+
+        $this->postJson('/api/claim-representative', [], $this->auth($ana))
+            ->assertJsonPath('claimed', true);
+
+        // a mesa 2 continua com o posto livre, e quem senta nela ainda responde
+        $this->getJson('/api/status', $this->auth($carla))
+            ->assertJsonPath('my_table.representative_id', null)
+            ->assertJsonPath('me.can_answer', true);
+
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 80)], $this->auth($carla))
+            ->assertCreated();
+
+        // cada mesa com o seu: Carla assumiu a 2 pelo próprio voto
+        $this->assertSame(
+            Participant::where('name', 'Ana')->value('id'),
+            EventTable::find(1)->representative_id,
+        );
+        $this->assertSame(
+            Participant::where('name', 'Carla')->value('id'),
+            EventTable::find(2)->representative_id,
+        );
+
+        // um voto por mesa, cada um na sua
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 150)], $this->auth($ana))
+            ->assertCreated();
+        $this->assertDatabaseCount('table_votes', 2);
+    }
+
+    /**
+     * Na Fase 2 quem troca é o representante, pela mesa: a mesa combina, ele
+     * registra, e a conversa continua até o cronômetro fechar. Uma linha só por
+     * mesa, com os pontos recongelados na escolha nova.
+     */
+    public function test_the_representative_can_change_the_table_vote_while_the_round_is_open(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+        $bruno = $this->join('Bruno', 1);
+
+        $question = $this->startBonusRound();
+
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 0)], $this->auth($ana))
+            ->assertCreated()
+            ->assertJsonPath('changed', false);
+
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 150)], $this->auth($ana))
+            ->assertOk()
+            ->assertJsonPath('changed', true)
+            ->assertJsonPath('status.me.voted_option_id', $this->optionWorth($question, 150));
+
+        $this->assertDatabaseCount('table_votes', 1);
+        $this->assertDatabaseHas('table_votes', [
+            'event_table_id' => 1,
+            'option_id' => $this->optionWorth($question, 150),
+            'points' => 150,
+        ]);
+
+        // o colega enxerga a decisão da mesa como registrada, sem poder mexer
+        $this->getJson('/api/status', $this->auth($bruno))
+            ->assertJsonPath('my_table.has_voted', true)
+            ->assertJsonPath('me.can_answer', false);
+
+        // fechada a rodada, nem o representante troca mais
+        $this->postJson('/api/admin/close', [], $this->master);
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, -50)], $this->auth($ana))
+            ->assertStatus(409);
+
+        $this->assertDatabaseHas('table_votes', ['event_table_id' => 1, 'points' => 150]);
+    }
+
+    /**
+     * O facilitador é o desempate humano do posto: troca quem registra sem
+     * apagar o que já foi registrado, e devolve a mesa ao estado livre quando
+     * quem assumiu saiu da sala.
+     */
+    public function test_the_facilitator_can_swap_the_representative_mid_round(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+        $bruno = $this->join('Bruno', 1);
+        $brunoId = Participant::where('name', 'Bruno')->value('id');
+
+        $question = $this->startBonusRound();
+
+        $this->postJson('/api/claim-representative', [], $this->auth($ana))
+            ->assertJsonPath('claimed', true);
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 80)], $this->auth($ana))
+            ->assertCreated();
+
+        $this->postJson('/api/admin/tables/1/representative', ['participant_id' => $brunoId], $this->master)
+            ->assertOk();
+
+        // o posto troca de mãos: Bruno registra, Ana não
+        $this->assertSame($brunoId, EventTable::find(1)->representative_id);
+        $this->assertFalse($this->getJson('/api/status', $this->auth($ana))->json('me.can_answer'));
+
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, -50)], $this->auth($ana))
+            ->assertForbidden();
+
+        // e Bruno corrige a decisão da mesa na mesma linha
+        $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 150)], $this->auth($bruno))
+            ->assertOk()
+            ->assertJsonPath('changed', true);
+
+        $this->assertDatabaseCount('table_votes', 1);
+        $this->assertDatabaseHas('table_votes', ['event_table_id' => 1, 'points' => 150]);
+
+        // liberar o posto devolve a mesa à disputa, com o voto onde estava
+        $this->postJson('/api/admin/tables/1/representative', ['participant_id' => null], $this->master)
+            ->assertOk();
+
+        $this->assertNull(EventTable::find(1)->representative_id);
+        $this->assertTrue($this->getJson('/api/status', $this->auth($ana))->json('me.can_answer'));
+        $this->assertDatabaseCount('table_votes', 1);
+    }
+
     /**
      * A rodada final: uma missão só, sem alternativas, decidida em consenso e
      * pontuada mesa a mesa pelo facilitador.
@@ -624,11 +834,20 @@ class ConsensusFlowTest extends TestCase
         $this->postJson('/api/admin/next-phase', [], $this->master)
             ->assertOk()
             ->assertJsonPath('event.phase', 2)
-            ->assertJsonPath('event.total_rounds', 1)
+            // cinco cenários de mesa + a rodada final; o desempate fica fora
+            ->assertJsonPath('event.total_rounds', 6)
             ->assertJsonPath('event.phase_mode', 'consensus')
-            ->assertJsonPath('question.manual_scoring', true);
+            ->assertJsonPath('question.manual_scoring', false);
 
-        $this->postJson('/api/admin/start', [], $this->master)->assertOk();
+        // a final é o fim da fase: chega-se nela depois de rejogar os cinco
+        for ($i = 1; $i < 6; $i++) {
+            $this->postJson('/api/admin/next', [], $this->master);
+        }
+
+        $this->postJson('/api/admin/start', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round', 6)
+            ->assertJsonPath('question.manual_scoring', true);
 
         // o celular só exibe a missão: não há alternativa nem representante
         $status = $this->getJson('/api/status', $this->auth($ana))->json();
@@ -677,7 +896,7 @@ class ConsensusFlowTest extends TestCase
     public function test_the_final_round_scores_wait_for_the_reveal(): void
     {
         $this->postJson('/api/admin/open', [], $this->master);
-        $this->postJson('/api/admin/next-phase', [], $this->master);
+        $this->goToFinalRound();
         $this->postJson('/api/admin/start', [], $this->master);
         $this->scoreTable(1, 150);
 
@@ -757,13 +976,18 @@ class ConsensusFlowTest extends TestCase
         $this->postJson('/api/admin/open', [], $this->master);
         $this->postJson('/api/admin/next-phase', [], $this->master)
             ->assertOk()
-            ->assertJsonPath('event.total_rounds', 1);
+            ->assertJsonPath('event.total_rounds', 6);
 
-        // a Fase 2 tem uma rodada só, e "próxima rodada" para nela: o desempate
-        // fica fora da contagem e só entra pelo botão dedicado do painel
+        // "próxima rodada" atravessa os cinco cenários e para na final: o
+        // desempate fica fora da contagem e só entra pelo botão do painel
+        for ($i = 1; $i < 6; $i++) {
+            $this->postJson('/api/admin/next', [], $this->master);
+        }
+
+        // a sexta é a última: daqui "próxima" não anda mais
         $this->postJson('/api/admin/next', [], $this->master)
             ->assertOk()
-            ->assertJsonPath('event.round', 1)
+            ->assertJsonPath('event.round', 6)
             ->assertJsonPath('question.is_bonus', false)
             ->assertJsonPath('question.manual_scoring', true);
 
@@ -791,38 +1015,185 @@ class ConsensusFlowTest extends TestCase
     }
 
     /**
-     * A estrutura do evento, como o PDF a define: cinco rodadas com régua na
-     * Fase 1 e uma rodada final aberta na Fase 2.
+     * A estrutura do evento: os mesmos cinco cenários jogados duas vezes —
+     * sozinho na Fase 1, em mesa na Fase 2 — e a rodada final fechando.
+     *
+     * A simetria não é decorativa: é o que faz o comparativo do fecho medir a
+     * decisão coletiva contra a individual **na mesma pergunta**, em vez de
+     * contra outra coisa.
      */
-    public function test_phase_two_is_a_single_final_round_without_alternatives(): void
+    public function test_phase_two_replays_the_same_five_scenarios_in_consensus(): void
     {
         $phaseOne = Question::with('options')->where('phase', 1)->orderBy('round')->get();
-        $phaseTwo = Question::with('options')->where('phase', 2)->where('is_bonus', false)->get();
+        $phaseTwo = Question::with('options')
+            ->where('phase', 2)->where('is_bonus', false)->where('manual_scoring', false)
+            ->orderBy('round')->get();
 
         $this->assertCount(5, $phaseOne);
-        $this->assertCount(1, $phaseTwo);
+        $this->assertCount(5, $phaseTwo);
 
-        foreach ($phaseOne as $question) {
+        foreach ($phaseOne as $i => $question) {
+            $mesa = $phaseTwo[$i];
+
             $this->assertSame(Question::MODE_INDIVIDUAL, $question->mode);
+            $this->assertSame(Question::MODE_CONSENSUS, $mesa->mode);
             $this->assertFalse($question->isManual());
+            $this->assertFalse($mesa->isManual());
+
+            // mesma pergunta dos dois lados, na mesma ordem
+            $this->assertSame($question->round, $mesa->round);
+            $this->assertSame($question->label, $mesa->label);
+            $this->assertSame($question->title, $mesa->title);
+            $this->assertSame($question->context, $mesa->context);
 
             // a régua é a mesma em todas: uma melhor decisão (+150), uma boa
             // mas subótima (+80) e duas que não geram valor
-            $points = $question->options->pluck('points');
-            $this->assertCount(4, $points);
-            $this->assertSame(1, $points->filter(fn ($p) => $p === 150)->count());
-            $this->assertSame(1, $points->filter(fn ($p) => $p === 80)->count());
-            $this->assertSame(2, $points->filter(fn ($p) => $p <= 0)->count());
+            foreach ([$question, $mesa] as $each) {
+                $points = $each->options->pluck('points');
+                $this->assertCount(4, $points);
+                $this->assertSame(1, $points->filter(fn ($p) => $p === 150)->count());
+                $this->assertSame(1, $points->filter(fn ($p) => $p === 80)->count());
+                $this->assertSame(2, $points->filter(fn ($p) => $p <= 0)->count());
+            }
+
+            // e alternativas próprias, não compartilhadas: o voto da mesa não
+            // pode cair na mesma linha do voto individual
+            $this->assertEmpty(
+                $question->options->pluck('id')->intersect($mesa->options->pluck('id')),
+            );
+        }
+    }
+
+    /**
+     * A Fase 2 rodada a rodada: a mesa percorre os mesmos cinco cenários, com o
+     * representante registrando, e desemboca na rodada final.
+     */
+    public function test_the_table_walks_the_five_consensus_rounds_then_the_final(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+        $bruno = $this->join('Bruno', 1);
+
+        $this->postJson('/api/admin/next-phase', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.total_rounds', 6);
+
+        for ($round = 1; $round <= 5; $round++) {
+            $this->postJson('/api/admin/start', [], $this->master)
+                ->assertOk()
+                ->assertJsonPath('event.phase', 2)
+                ->assertJsonPath('event.round', $round)
+                ->assertJsonPath('question.manual_scoring', false);
+
+            // uma decisão por mesa, registrada por quem assumiu o posto
+            $question = $this->question(2, $round);
+            $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 150)], $this->auth($ana))
+                ->assertCreated();
+            $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, -50)], $this->auth($bruno))
+                ->assertForbidden();
+
+            $this->postJson('/api/admin/reveal', [], $this->master)->assertOk();
+            $this->postJson('/api/admin/next', [], $this->master)->assertOk();
         }
 
-        $final = $phaseTwo->first();
+        // cinco decisões de mesa, e a sexta rodada é a final
+        $this->assertDatabaseCount('table_votes', 5);
+        $this->getJson('/api/admin/overview', $this->master)
+            ->assertJsonPath('event.round', 6)
+            ->assertJsonPath('question.manual_scoring', true);
 
-        $this->assertSame(1, $final->round);
+        // o posto foi assumido uma vez e valeu para as cinco
+        $this->assertSame(
+            Participant::where('name', 'Ana')->value('id'),
+            EventTable::find(1)->representative_id,
+        );
+
+        // 5 × 150 de régua + a final lançada à mão entram no mesmo total
+        $this->scoreTable(1, 120)->assertOk();
+        $row = collect($this->getJson('/api/admin/overview', $this->master)->json('table_ranking'))
+            ->firstWhere('table_id', 1);
+
+        $this->assertSame(870, $row['phase_two_points']);
+        $this->assertSame(6, $row['phase_two_votes']);
+        // acerto conta só as cinco com régua — a final não tinha o que acertar
+        $this->assertSame(5, $row['phase_two_correct']);
+        $this->assertSame(100, $row['phase_two_accuracy']);
+    }
+
+    /**
+     * O comparativo do fecho agora mede a mesma pergunta dos dois lados: a
+     * régua da rodada final, que é do facilitador, fica fora das médias e do
+     * acerto para não se misturar à régua das alternativas.
+     */
+    public function test_the_comparison_measures_both_phases_on_the_same_scale(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+
+        // Fase 1: decide sozinha e escolhe a pior das cinco (−50 por decisão)
+        for ($round = 1; $round <= 5; $round++) {
+            $this->postJson('/api/admin/start', [], $this->master);
+            $this->postJson('/api/vote', [
+                'option_id' => $this->optionWorth($this->question(1, $round), -50),
+            ], $this->auth($ana))->assertCreated();
+            $this->postJson('/api/admin/next', [], $this->master);
+        }
+
+        $this->postJson('/api/admin/next-phase', [], $this->master)->assertOk();
+
+        // Fase 2: a mesa acerta as cinco (150 por decisão)
+        for ($round = 1; $round <= 5; $round++) {
+            $this->postJson('/api/admin/start', [], $this->master);
+            $this->postJson('/api/vote', [
+                'option_id' => $this->optionWorth($this->question(2, $round), 150),
+            ], $this->auth($ana))->assertCreated();
+            $this->postJson('/api/admin/next', [], $this->master);
+        }
+
+        // e a rodada final recebe um lançamento fora de escala, de propósito
+        $this->postJson('/api/admin/start', [], $this->master);
+        $this->scoreTable(1, 900)->assertOk();
+
+        $this->postJson('/api/admin/answers/reveal', [], $this->master)->assertOk();
+        $comparison = $this->getJson('/api/display')->json('phase_comparison');
+
+        // acerto existe dos dois lados: as perguntas são as mesmas
+        $this->assertSame(0, $comparison['individual']['accuracy']);
+        $this->assertSame(100, $comparison['table']['accuracy']);
+        $this->assertSame(100, $comparison['accuracy_delta']);
+
+        // média por decisão ignora a final: 150 − (−50), não (750+900)/6 + 50
+        $this->assertSame(-50.0, (float) $comparison['individual']['average']);
+        $this->assertSame(150.0, (float) $comparison['table']['average']);
+        $this->assertSame(200.0, (float) $comparison['average_delta']);
+        $this->assertTrue($comparison['consensus_won']);
+
+        // mas os pontos somam tudo, inclusive a final
+        $this->assertSame(1650, $comparison['table']['points']);
+
+        // e a evolução usa a mesma medida das médias
+        $row = collect($this->getJson('/api/admin/overview', $this->master)->json('table_ranking'))
+            ->firstWhere('table_id', 1);
+        $this->assertSame(200.0, (float) $row['evolution']);
+    }
+
+    /** A rodada final fecha a Fase 2: a sexta, sem alternativas e pontuada à mão. */
+    public function test_the_final_round_closes_phase_two_without_alternatives(): void
+    {
+        $final = Question::with('options')->where('manual_scoring', true)->firstOrFail();
+
+        $this->assertSame(2, $final->phase);
+        $this->assertSame(6, $final->round);
         $this->assertSame(Question::MODE_CONSENSUS, $final->mode);
         $this->assertTrue($final->isManual());
         // sem alternativas: a mesa decide livremente
         $this->assertCount(0, $final->options);
         $this->assertStringContainsString('Maximizar o resultado total do hotel', $final->context);
+
+        // e o desempate vem depois dela, fora da contagem
+        $bonus = Question::where('is_bonus', true)->firstOrFail();
+        $this->assertSame(2, $bonus->phase);
+        $this->assertSame(7, $bonus->round);
     }
 
     public function test_the_event_walks_five_rounds_then_phase_two(): void
@@ -850,6 +1221,61 @@ class ConsensusFlowTest extends TestCase
         $this->postJson('/api/admin/end', [], $this->master)
             ->assertOk()
             ->assertJsonPath('event.status', Event::STATUS_FINISHED);
+    }
+
+    /**
+     * Seguir sem revelar: a rodada que a conversa já resolveu antes do telão.
+     * Nada é apagado, e o voltar traz a rodada de volta — revelada, porque foi
+     * jogada. É o que sustenta o botão continuar clicável fora da revelação.
+     */
+    public function test_the_master_can_move_on_without_revealing_the_round(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+
+        $this->postJson('/api/admin/start', [], $this->master);
+        $this->postJson('/api/vote', [
+            'option_id' => $this->optionWorth($this->question(1, 1), 150),
+        ], $this->auth($ana));
+
+        // sem passar pela revelação: a rodada 2 sobe parada, pronta para abrir
+        $this->postJson('/api/admin/next', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round', 2)
+            ->assertJsonPath('event.round_status', 'idle')
+            ->assertJsonPath('event.voting_open', false);
+
+        // o voto continua onde estava — seguir sem revelar não apaga nada
+        $this->assertDatabaseCount('participant_votes', 1);
+
+        $this->postJson('/api/admin/previous', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round', 1)
+            ->assertJsonPath('event.round_status', 'revealed')
+            ->assertJsonPath('results.total_votes', 1);
+    }
+
+    /** Pular uma rodada que nunca foi aberta é o mesmo caminho, sem voto. */
+    public function test_an_unplayed_round_can_be_skipped(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+
+        $this->postJson('/api/admin/next', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round', 2)
+            ->assertJsonPath('event.round_status', 'idle')
+            ->assertJsonPath('question.round', 2);
+
+        // e a rodada pulada continua disponível para ser aberta na volta
+        $this->postJson('/api/admin/previous', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round', 1)
+            ->assertJsonPath('event.round_status', 'idle');
+
+        $this->postJson('/api/admin/start', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round', 1)
+            ->assertJsonPath('event.round_status', 'voting');
     }
 
     /**
@@ -942,7 +1368,7 @@ class ConsensusFlowTest extends TestCase
         $this->postJson('/api/admin/previous', [], $this->master)
             ->assertOk()
             ->assertJsonPath('event.phase', 2)
-            ->assertJsonPath('event.round', 1)
+            ->assertJsonPath('event.round', 6)
             ->assertJsonPath('question.is_bonus', false)
             ->assertJsonPath('question.manual_scoring', true);
     }
@@ -977,7 +1403,7 @@ class ConsensusFlowTest extends TestCase
             ->assertOk()
             ->assertJsonPath('event.round_status', 'voting')
             ->assertJsonPath('event.round', 1)
-            ->assertJsonPath('timer.duration', 30);
+            ->assertJsonPath('timer.duration', 60);
 
         $this->postJson('/api/vote', [
             'option_id' => $this->optionWorth($this->question(1, 1), 80),
@@ -1283,17 +1709,32 @@ class ConsensusFlowTest extends TestCase
         $this->assertNull(EventTable::find(1)->representative_id);
     }
 
-    /** A Fase 1 dá 30 segundos por rodada — 20 não davam para ler o cenário. */
-    public function test_phase_one_rounds_run_for_thirty_seconds(): void
+    /**
+     * Um relógio por fase: 60s para decidir sozinho, 120s para a mesa conversar
+     * antes de decidir. O do evento parado acompanha a Fase 1, que é onde ele
+     * aparece — antes do primeiro "abrir votação".
+     */
+    public function test_each_phase_has_its_own_round_clock(): void
     {
         foreach (Question::where('phase', 1)->get() as $question) {
-            $this->assertSame(30, $question->duration);
+            $this->assertSame(60, $question->duration);
+        }
+
+        // as duas da Fase 2 — a rodada final e o desempate — no mesmo relógio
+        foreach (Question::where('phase', 2)->get() as $question) {
+            $this->assertSame(120, $question->duration);
         }
 
         $this->postJson('/api/admin/open', [], $this->master);
         $this->postJson('/api/admin/start', [], $this->master)
             ->assertOk()
-            ->assertJsonPath('timer.duration', 30);
+            ->assertJsonPath('timer.duration', 60);
+
+        $this->postJson('/api/admin/next-phase', [], $this->master);
+        $this->postJson('/api/admin/start', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.phase', 2)
+            ->assertJsonPath('timer.duration', 120);
     }
 
     public function test_layout_positions_can_be_saved_in_bulk(): void

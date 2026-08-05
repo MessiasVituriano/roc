@@ -3,22 +3,24 @@
 Dinâmica de decisão para auditórios, conduzida ao vivo por um facilitador.
 Especificação de conteúdo e regras: [`docs/dinamica-roc.md`](docs/dinamica-roc.md).
 
-- **Fase 1 — individual.** 5 rodadas sincronizadas (30s de voto + revelação).
+- **Fase 1 — individual.** 5 rodadas sincronizadas (60s de voto + revelação).
   Cada pessoa recebe uma **missão sorteada** e decide com ela, e pode trocar a
   escolha enquanto o cronômetro corre.
 - **Virada de fase.** O placar **por grupo de missão** vai ao telão: mesma
   régua, missões diferentes, decisões diferentes.
-- **Fase 2 — a rodada final.** Uma rodada só, **sem alternativas**: todas as
-  mesas recebem a mesma missão final — a que funde as 4 missões da Fase 1 — e
-  decidem livremente por consenso (~5 min). A pontuação é **lançada mesa a mesa
-  pelo facilitador**, no painel.
-- **O comparativo.** O fecho: o gabarito das cinco rodadas da Fase 1, a
-  pontuação da rodada final por mesa e o **valor gerado por decisão** nos dois
-  formatos — sozinho contra em mesa.
+- **Fase 2 — em mesa.** As **mesmas cinco perguntas**, agora decididas por
+  consenso pela mesa (2 min cada), com o **representante** registrando por
+  todos. Fecha com a **rodada final**: uma 6ª pergunta **sem alternativas** —
+  a missão que funde as 4 missões da Fase 1 —, **lançada mesa a mesa pelo
+  facilitador** no painel.
+- **O comparativo.** O fecho: o gabarito das cinco rodadas e o confronto
+  direto — **a mesma pergunta**, decidida sozinho e depois em mesa, em acerto e
+  em **valor gerado por decisão**.
 
-Nas cinco rodadas da Fase 1 cada alternativa vale pontos fixos
-(**+150 / +80 / 0 / −50**) e nada disso aparece antes do **clique do
-facilitador**. A rodada final não tem régua: quem pontua é o facilitador.
+Cada alternativa vale pontos fixos (**+150 / +80 / 0 / −50**) e nada disso
+aparece antes do **clique do facilitador**. A régua é a mesma nas duas fases —
+é o que torna o confronto uma medida. Só a rodada final não tem régua: quem
+pontua é o facilitador.
 
 | Tela | URL |
 |---|---|
@@ -177,10 +179,10 @@ Numa VPS de 2 GB, baixe para 16: ainda é bem mais que o pico real.
 | 2 | **▶ Abrir votação da rodada** | cronômetro corre, votos são aceitos |
 | 3 | **⏹ Encerrar votação** | (opcional) fecha antes do tempo |
 | 4 | **📊 REVELAR no telão** | a distribuição dos votos vai ao telão (sem gabarito) |
-| 5 | **⏭ Próxima rodada** | carrega a rodada seguinte |
+| 5 | **⏭ Próxima rodada** | carrega a rodada seguinte — revelar não é pré-requisito |
 | ↩ | **⏮ Rodada anterior** | volta uma rodada (revelada, se já foi jogada); na 1ª rodada da fase, volta a fase |
 | 6 | **🎭 Revelar placar por missão** | a virada de fase |
-| 7 | **➡ Ir para a Fase 2** | carrega a rodada final; a pontuação é lançada mesa a mesa no painel |
+| 7 | **➡ Ir para a Fase 2** | carrega a 1ª das cinco rodadas de mesa; da 6ª em diante a pontuação é lançada à mão no painel |
 | 8 | **🔓 Revelar gabarito + comparativo** | **o fecho:** gabarito da Fase 1 e a rodada final no telão |
 | 9 | **🎲 Rodada de desempate** | só se o empate sobreviver aos 3 primeiros critérios |
 | 10 | **🏁 Finalizar evento** | telão mostra a mesa vencedora |
@@ -189,6 +191,17 @@ Os passos **6** e **8** são os dois momentos deliberados do facilitador — o
 telão só muda quando ele clica. O passo 8 é separado do 10 de propósito:
 encerrar joga os celulares na tela de "obrigado", enquanto revelar o gabarito
 mantém a sala inteira olhando para o telão.
+
+**Avançar e voltar são livres dentro do roteiro.** O passo 4 é o caminho
+normal, não uma condição: **⏭** segue com a rodada parada (pular uma rodada que
+não vai ser jogada) ou com a votação fechada (a conversa já resolveu antes do
+telão) — e aí o botão se anuncia como *(sem revelar)*, sem o destaque que ele
+tem depois da revelação. Nenhum dos dois apaga voto: os votos moram na pergunta,
+então **⏮** traz a rodada de volta — **revelada**, se ela chegou a ser jogada.
+
+Os dois ficam travados enquanto a votação está **aberta**: um clique torto não
+derruba a rodada que está correndo. **⏹ Encerrar** primeiro, e aí os dois
+liberam.
 
 `+10s` / `+30s` estendem a rodada. **🔄 Recarregar a rodada** é a saída de
 emergência: apaga os votos da rodada corrente e devolve o evento ao ponto de
@@ -272,13 +285,17 @@ ao telão antes da hora ou a sala votou no meio de uma explicação.
 3. maior **evolução Fase 1 → Fase 2**
 4. **rodada de desempate ao vivo**
 
-A evolução compara a média de pontos **por decisão**: quanto a rodada final
-rendeu frente ao que os membros vinham rendendo sozinhos. O painel marca em
-vermelho quem chegou ao nível 4 ainda empatado com a liderança — é o gatilho
-para o facilitador rodar a pergunta bônus.
+A evolução compara a média de pontos **por decisão** nas mesmas cinco
+perguntas: quanto a mesa rendeu frente ao que os membros vinham rendendo
+sozinhos. O painel marca em vermelho quem chegou ao nível 4 ainda empatado com
+a liderança — é o gatilho para o facilitador rodar a pergunta bônus.
 
-A rodada final não tem alternativa certa, então a coluna de acertos da Fase 2
-aparece como `—`: os pontos dela somam no placar, mas nunca contam como acerto.
+**Onde a rodada final entra e onde não entra.** Ela soma nos **pontos** e no
+total, como qualquer decisão. Fica fora das **médias**, da **evolução** e do
+**acerto**: é a única pergunta sem alternativa, pontuada numa escala que é do
+facilitador, e misturá-la faria a comparação medir duas réguas ao mesmo tempo —
+um lançamento generoso viraria "evolução". Por isso a coluna de acertos da Fase
+2 conta 5 decisões, não 6.
 
 ### Estados da mesa
 
@@ -348,10 +365,16 @@ Missões, rodadas, alternativas e pontos ficam em
 `database/seeders/LiveConsensusSeeder.php`. Trocar o conteúdo é editar esse
 arquivo — nada no código depende do texto.
 
-As cinco rodadas da Fase 1 têm alternativas e régua. A **rodada final** (Fase 2,
-rodada 1) tem `manual_scoring => true` e `options => []`: o texto da missão vive
-em `context`, a duração em `LiveConsensusSeeder::FINAL_ROUND_DURATION` e a
-pontuação entra pelo painel, mesa a mesa.
+Os **cinco cenários** vivem em `LiveConsensusSeeder::scenarios()`, sem fase —
+o seeder os monta duas vezes, individuais na Fase 1 e em consenso na Fase 2.
+Editar um cenário muda as duas pontas de uma vez, que é o que mantém o
+comparativo honesto.
+
+A **rodada final** (Fase 2, rodada 6) e o **desempate** (rodada 7) ficam em
+`closingRounds()`. A final tem `manual_scoring => true` e `options => []`: o
+texto da missão vive em `context`, a duração em
+`LiveConsensusSeeder::PHASE_TWO_DURATION` e a pontuação entra pelo painel,
+mesa a mesa.
 
 > ⚠️ **Pendente:** a apresentação não define a **pergunta bônus de desempate**.
 > Ela está no seeder como `[PREENCHER]` (Fase 2, rodada 2, `is_bonus`), com a
