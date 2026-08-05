@@ -696,6 +696,26 @@ async function saveLayout() {
                                 class="flex items-center gap-2 text-sm"
                                 :class="person.blocked ? 'opacity-50' : ''"
                             >
+                                <!--
+                                    O bloquear abre a linha, colado no nome que
+                                    ele afeta: é o nome impróprio que o
+                                    facilitador está lendo na lista, e procurar
+                                    o botão do outro lado custa o segundo em que
+                                    ele já perdeu a linha certa.
+                                -->
+                                <button
+                                    class="shrink-0 w-6 h-6 grid place-items-center rounded-lg text-[11px] transition"
+                                    :class="person.blocked
+                                        ? 'bg-rose-500 text-white'
+                                        : 'bg-slate-800 text-slate-500 hover:bg-slate-700 hover:text-rose-300'"
+                                    :disabled="busy === `block-${person.id}`"
+                                    :title="person.blocked
+                                        ? 'Bloqueado no ranking individual — clique para liberar'
+                                        : 'Tirar do ranking individual (os votos seguem contando)'"
+                                    @click="setBlocked(person.id, !person.blocked)"
+                                >
+                                    🚫
+                                </button>
                                 <PixelAvatar :seed="person.avatar_seed" :gender="person.gender" :size="24" :dim="!person.online" />
                                 <span class="min-w-0">
                                     <span class="block truncate text-slate-200" :class="person.blocked ? 'line-through' : ''">
@@ -707,21 +727,6 @@ async function saveLayout() {
                                     </span>
                                 </span>
                                 <div class="ml-auto flex items-center gap-1 shrink-0">
-                                    <!-- fora do ranking individual; o voto dele
-                                         continua somando para a mesa -->
-                                    <button
-                                        class="text-[10px] font-bold px-2 py-0.5 rounded-lg transition"
-                                        :class="person.blocked
-                                            ? 'bg-rose-500 text-white'
-                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-rose-300'"
-                                        :disabled="busy === `block-${person.id}`"
-                                        :title="person.blocked
-                                            ? 'Bloqueado no ranking individual — clique para liberar'
-                                            : 'Tirar do ranking individual (os votos seguem contando)'"
-                                        @click="setBlocked(person.id, !person.blocked)"
-                                    >
-                                        {{ person.blocked ? '🚫' : 'bloquear' }}
-                                    </button>
                                     <!-- bloqueado não é elegível: bloquear já
                                          libera o posto, e o servidor recusa -->
                                     <button
@@ -861,7 +866,6 @@ async function saveLayout() {
                                     <th class="text-right pb-1" title="Pontos da própria decisão, Fase 1">F1</th>
                                     <th class="text-right pb-1" title="Pontos da mesa desta pessoa, Fase 2">F2</th>
                                     <th class="text-right pb-1">Total</th>
-                                    <th class="pb-1"></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -872,6 +876,14 @@ async function saveLayout() {
                                     <td class="py-1 text-slate-500 tabular-nums w-7 align-top">{{ row.rank }}º</td>
                                     <td class="py-1 pr-2">
                                         <div class="flex items-center gap-1.5 min-w-0">
+                                            <!-- mesmo lugar da gaveta da mesa: o
+                                                 botão antes do nome que ele afeta -->
+                                            <button
+                                                class="shrink-0 w-5 h-5 grid place-items-center rounded text-[10px] text-slate-600 hover:bg-slate-800 hover:text-rose-300 transition"
+                                                :disabled="busy === `block-${row.participant_id}`"
+                                                title="Tirar do ranking individual (os votos seguem contando para a mesa e para a missão)"
+                                                @click="setBlocked(row.participant_id, true)"
+                                            >🚫</button>
                                             <PixelAvatar :seed="row.avatar_seed" :gender="row.gender" :size="20" />
                                             <span class="min-w-0">
                                                 <span class="flex items-center gap-1">
@@ -902,17 +914,9 @@ async function saveLayout() {
                                     <td class="py-1 text-right font-black tabular-nums text-white align-top">
                                         {{ row.combined_points }}
                                     </td>
-                                    <td class="py-1 pl-1 align-top">
-                                        <button
-                                            class="text-[10px] text-slate-600 hover:text-rose-300 transition"
-                                            :disabled="busy === `block-${row.participant_id}`"
-                                            title="Tirar do ranking individual (os votos seguem contando para a mesa e para a missão)"
-                                            @click="setBlocked(row.participant_id, true)"
-                                        >🚫</button>
-                                    </td>
                                 </tr>
                                 <tr v-if="!peopleRanking.length">
-                                    <td colspan="6" class="py-3 text-center text-xs text-slate-500 italic">
+                                    <td colspan="5" class="py-3 text-center text-xs text-slate-500 italic">
                                         Ninguém votou ainda.
                                     </td>
                                 </tr>
