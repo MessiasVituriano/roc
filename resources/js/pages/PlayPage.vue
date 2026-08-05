@@ -9,6 +9,10 @@ import MissionCard from '../components/MissionCard.vue'
 import ProgressBar from '../components/ProgressBar.vue'
 import BrandLogo from '../components/BrandLogo.vue'
 import LoadingScreen from '../components/LoadingScreen.vue'
+import AvatarBuilder from '../components/AvatarBuilder.vue'
+import ContactField from '../components/ContactField.vue'
+import { STYLES, decodeAvatar, encodeAvatar, isChoosableStyle, randomAvatarParts } from '../lib/avatar'
+import { contactLooksValid, contactPayload } from '../lib/contact'
 
 const router = useRouter()
 
@@ -156,6 +160,128 @@ function leave() {
     participantToken.clear()
     router.replace('/')
 }
+
+// --- editar os próprios dados -------------------------------------------
+// Só na sala de espera: o nome é digitado em pé, num celular, e sai torto. Uma
+// vez aberto o evento, o nome já está no telão e o avatar já é como a mesa
+// reconhece a pessoa — o servidor recusa a partir daí.
+const editing = ref(false)
+const savingProfile = ref(false)
+const editError = ref('')
+const form = ref({ name: '', hotel: '', gender: 'male', contactType: 'email', email: '', phone: '' })
+const formParts = ref(randomAvatarParts())
+const formSeed = computed(() => encodeAvatar(formParts.value))
+
+const canEditProfile = computed(() => event.value?.status === 'draft')
+const formReady = computed(
+    () => form.value.name.trim().length >= 2
+        && form.value.hotel.trim().length >= 2
+        && contactLooksValid(form.value.contactType, form.value.email, form.value.phone),
+)
+
+async function openEdit() {
+    editing.value = true
+    editError.value = ''
+
+    try {
+        // o contato não trafega no poll de 1s: vem daqui, sob demanda
+        const mine = await api.get('/me')
+
+        form.value = {
+            name: mine.name ?? '',
+            hotel: mine.hotel ?? '',
+            // gender fora da escolha (linha antiga, default da coluna) abriria
+            // o formulário sem nenhum botão marcado — e o salvar seria recusado
+            gender: isChoosableStyle(mine.gender) ? mine.gender : STYLES[0].key,
+            // o tipo abre no que a pessoa usou para entrar
+            contactType: mine.phone ? 'phone' : 'email',
+            email: mine.email ?? '',
+            phone: mine.phone ?? '',
+        }
+        // seed que não veio do montador (o fallback "p{id}" de quem entrou sem
+        // escolher) não decodifica: o formulário abre num sorteio, e o avatar
+        // só muda se a pessoa salvar
+        formParts.value = decodeAvatar(mine.avatar_seed ?? '') ?? randomAvatarParts()
+    } catch (e) {
+        editError.value = e.message
+    }
+}
+
+async function saveProfile() {
+    if (!formReady.value || savingProfile.value) return
+
+    savingProfile.value = true
+    editError.value = ''
+
+    try {
+        const payload = await api.post('/update-profile', {
+            name: form.value.name.trim(),
+            ...contactPayload(form.value.contactType, form.value.email, form.value.phone),
+            hotel: form.value.hotel.trim(),
+            gender: form.value.gender,
+            avatar_seed: formSeed.value,
+        })
+
+        state.value = payload.status
+        editing.value = false
+    } catch (e) {
+        editError.value = e.payload?.errors
+            ? Object.values(e.payload.errors).flat()[0]
+            : e.message
+    } finally {
+        savingProfile.value = false
+    }
+}
+
+// --- trocar de mesa ------------------------------------------------------
+// Sentou na errada, o colega estava na outra, a mesa do cadastro encheu antes
+// de ele chegar nela. A lista vem do /bootstrap, que é quem sabe a lotação de
+// todas as mesas — o /status só carrega a mesa da própria pessoa.
+const switching = ref(false)
+const switchTables = ref([])
+const switchMax = ref(10)
+const switchError = ref('')
+const switchingTo = ref(null)
+
+// Com a votação correndo a troca é recusada pelo servidor: sair da mesa
+// devolve o posto de representante, e fazer isso no meio da rodada levaria a
+// mesa junto. O botão some antes de a pessoa tentar.
+const canSwitchTable = computed(
+    () => Boolean(event.value)
+        && event.value.status !== 'finished'
+        && !(event.value.round_status === 'voting' && event.value.voting_open),
+)
+
+async function openSwitch() {
+    switching.value = true
+    switchError.value = ''
+
+    try {
+        const payload = await api.get('/bootstrap')
+        switchTables.value = payload.tables ?? []
+        switchMax.value = payload.max_participants ?? 10
+    } catch (e) {
+        switchError.value = e.message
+    }
+}
+
+async function switchTo(id) {
+    switchingTo.value = id
+    switchError.value = ''
+
+    try {
+        const payload = await api.post('/change-table', { table_id: id })
+        state.value = payload.status
+        switching.value = false
+    } catch (e) {
+        switchError.value = e.message
+        // a lista pode ter envelhecido entre abrir e tocar: recarrega para a
+        // mesa que encheu aparecer cheia
+        openSwitch()
+    } finally {
+        switchingTo.value = null
+    }
+}
 </script>
 
 <template>
@@ -208,6 +334,26 @@ function leave() {
                         </p>
                     </div>
                     <MissionCard v-if="mission && individual" :mission="mission" />
+                    <!--
+                        Enquanto o facilitador não abre, dá para consertar o que
+                        saiu torto do cadastro feito em pé, no auditório.
+                    -->
+                    <div class="flex flex-col items-center gap-2">
+                        <button
+                            v-if="canEditProfile"
+                            class="rounded-2xl px-5 py-3 text-sm font-bold text-slate-200 bg-white/5 hover:bg-white/10 ring-1 ring-white/10 transition"
+                            @click="openEdit"
+                        >
+                            ✏️ Editar meus dados
+                        </button>
+                        <button
+                            v-if="canSwitchTable"
+                            class="text-xs text-slate-500 underline hover:text-slate-300 transition"
+                            @click="openSwitch"
+                        >
+                            Sentei na mesa errada — trocar
+                        </button>
+                    </div>
                 </section>
 
                 <!-- entre rodadas: a missão fica sempre à vista -->
@@ -221,6 +367,13 @@ function leave() {
                         <p class="text-slate-400 text-sm px-4">
                             Fase {{ event?.phase }} · rodada {{ event?.round }} de {{ event?.total_rounds }}
                         </p>
+                        <button
+                            v-if="canSwitchTable"
+                            class="text-xs text-slate-500 underline hover:text-slate-300 transition"
+                            @click="openSwitch"
+                        >
+                            Trocar de mesa
+                        </button>
                     </div>
                 </section>
 
@@ -485,5 +638,136 @@ function leave() {
                 </section>
             </Transition>
         </main>
+
+        <!--
+            Editar os próprios dados. Mesmos campos do cadastro, montados dos
+            mesmos componentes — se a regra do contato mudar, muda nos dois.
+        -->
+        <div
+            v-if="editing"
+            class="fixed inset-0 z-30 bg-slate-950/85 backdrop-blur-sm overflow-y-auto p-5"
+            @click.self="editing = false"
+        >
+            <div class="mx-auto my-auto w-full max-w-md rounded-3xl bg-slate-900 ring-1 ring-white/10 p-5 space-y-4">
+                <div class="flex items-center gap-4">
+                    <PixelAvatar :seed="formSeed" :gender="form.gender" :size="64" />
+                    <div class="min-w-0">
+                        <h2 class="text-lg font-black text-white truncate">
+                            {{ form.name.trim() || 'Meus dados' }}
+                        </h2>
+                        <p class="text-xs text-slate-400">Só até o evento começar</p>
+                    </div>
+                </div>
+
+                <p v-if="editError" class="rounded-xl bg-rose-500/15 text-rose-300 text-sm px-4 py-2">
+                    {{ editError }}
+                </p>
+
+                <div class="space-y-1.5">
+                    <label class="text-xs font-bold uppercase tracking-widest text-slate-400">Nome</label>
+                    <input
+                        v-model="form.name"
+                        type="text"
+                        maxlength="60"
+                        autocomplete="name"
+                        class="w-full rounded-2xl bg-slate-800/80 px-4 py-3.5 text-white placeholder-slate-500 ring-2 ring-transparent focus:ring-indigo-400 outline-none transition"
+                    >
+                </div>
+
+                <ContactField
+                    v-model:type="form.contactType"
+                    v-model:email="form.email"
+                    v-model:phone="form.phone"
+                />
+
+                <div class="space-y-1.5">
+                    <label class="text-xs font-bold uppercase tracking-widest text-slate-400">Hotel</label>
+                    <input
+                        v-model="form.hotel"
+                        type="text"
+                        maxlength="120"
+                        autocomplete="organization"
+                        class="w-full rounded-2xl bg-slate-800/80 px-4 py-3.5 text-white placeholder-slate-500 ring-2 ring-transparent focus:ring-indigo-400 outline-none transition"
+                    >
+                </div>
+
+                <AvatarBuilder v-model:parts="formParts" v-model:gender="form.gender" />
+
+                <div class="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                        class="rounded-2xl px-4 py-3 font-bold text-slate-300 bg-white/5 hover:bg-white/10 transition"
+                        @click="editing = false"
+                    >
+                        Cancelar
+                    </button>
+                    <button
+                        class="rounded-2xl px-4 py-3 font-black text-white bg-gradient-to-r from-emerald-500 to-teal-400 hover:brightness-110 active:scale-95 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                        :disabled="!formReady || savingProfile"
+                        @click="saveProfile"
+                    >
+                        {{ savingProfile ? 'Salvando…' : 'Salvar' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!--
+            Trocar de mesa. Sobreposto em vez de virar uma tela do fluxo: a
+            troca é um conserto, e sair dela tem de devolver a pessoa
+            exatamente onde ela estava — inclusive no meio de uma revelação.
+        -->
+        <div
+            v-if="switching"
+            class="fixed inset-0 z-30 bg-slate-950/85 backdrop-blur-sm flex flex-col p-5"
+            @click.self="switching = false"
+        >
+            <div class="m-auto w-full max-w-sm rounded-3xl bg-slate-900 ring-1 ring-white/10 p-5 space-y-4">
+                <div>
+                    <h2 class="text-lg font-black text-white">Trocar de mesa</h2>
+                    <p class="text-xs text-slate-400 mt-0.5">
+                        Suas decisões já registradas continuam contando para a mesa em que
+                        você as tomou.
+                    </p>
+                </div>
+
+                <p v-if="switchError" class="rounded-xl bg-rose-500/15 text-rose-300 text-sm px-4 py-2">
+                    {{ switchError }}
+                </p>
+
+                <div class="grid grid-cols-2 gap-2 max-h-72 overflow-y-auto pr-1">
+                    <button
+                        v-for="row in switchTables"
+                        :key="row.id"
+                        class="rounded-2xl p-2.5 ring-2 transition-all duration-200 text-left flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                        :class="row.id === table?.id ? 'bg-white/10 ring-white/25' : 'ring-white/10 bg-slate-800/60 enabled:hover:ring-white/25'"
+                        :disabled="row.full || row.id === table?.id || switchingTo !== null"
+                        @click="switchTo(row.id)"
+                    >
+                        <span class="text-lg">{{ row.icon }}</span>
+                        <span class="min-w-0">
+                            <span class="block text-sm font-bold text-white truncate">{{ row.name }}</span>
+                            <span
+                                class="block text-[11px]"
+                                :class="row.full ? 'text-amber-300 font-bold' : 'text-slate-400'"
+                            >
+                                <template v-if="row.id === table?.id">você está aqui</template>
+                                <template v-else-if="row.full">completa</template>
+                                <template v-else>{{ row.participants_count }}/{{ switchMax }}</template>
+                            </span>
+                        </span>
+                    </button>
+                    <p v-if="!switchTables.length" class="col-span-2 text-sm text-slate-500 italic py-2">
+                        Carregando as mesas…
+                    </p>
+                </div>
+
+                <button
+                    class="w-full rounded-2xl px-4 py-3 font-bold text-slate-300 bg-white/5 hover:bg-white/10 transition"
+                    @click="switching = false"
+                >
+                    Cancelar
+                </button>
+            </div>
+        </div>
     </div>
 </template>

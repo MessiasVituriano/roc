@@ -1224,6 +1224,299 @@ class ConsensusFlowTest extends TestCase
     }
 
     /**
+     * Corrigir o cadastro na sala de espera: o nome é digitado em pé, num
+     * celular, e sai torto. Enquanto ninguém votou, consertar não custa nada.
+     */
+    public function test_a_participant_can_fix_their_own_data_before_the_event_opens(): void
+    {
+        $ana = $this->join('Ana', 1);
+
+        // o contato não trafega no poll de 1s — vem do /me, sob demanda
+        $this->getJson('/api/status', $this->auth($ana))
+            ->assertOk()
+            ->assertJsonMissingPath('me.email');
+
+        $this->getJson('/api/me', $this->auth($ana))
+            ->assertOk()
+            ->assertJsonPath('name', 'Ana')
+            ->assertJsonPath('email', 'ana@exemplo.com')
+            ->assertJsonPath('hotel', 'Hotel Aurora');
+
+        $this->postJson('/api/update-profile', [
+            'name' => '  Ana Silva  ',
+            'phone' => '+55 (11) 99999-9999',
+            'hotel' => 'Hotel Bela Vista',
+            'gender' => 'male',
+            'avatar_seed' => 'a1-2-3-4',
+        ], $this->auth($ana))
+            ->assertOk()
+            ->assertJsonPath('status.me.name', 'Ana Silva')
+            ->assertJsonPath('status.me.gender', 'male')
+            ->assertJsonPath('status.me.avatar_seed', 'a1-2-3-4');
+
+        // trocou de e-mail para telefone, e o telefone entra normalizado
+        $this->assertDatabaseHas('participants', [
+            'name' => 'Ana Silva',
+            'email' => null,
+            'phone' => '11999999999',
+            'hotel' => 'Hotel Bela Vista',
+        ]);
+
+        // o próprio contato não colide consigo mesmo ao salvar de novo
+        $this->postJson('/api/update-profile', [
+            'name' => 'Ana Silva',
+            'phone' => '11999999999',
+            'hotel' => 'Hotel Bela Vista',
+            'gender' => 'male',
+        ], $this->auth($ana))->assertOk();
+    }
+
+    /**
+     * A escolha do avatar é fechada em masculino e feminino — no servidor, não
+     * só no seletor. O sprite neutro continua existindo para desenhar linhas
+     * antigas, mas ninguém entra nem se edita para ele.
+     */
+    public function test_the_avatar_style_is_limited_to_male_and_female(): void
+    {
+        $ana = $this->join('Ana', 1);
+
+        foreach (['male', 'female'] as $gender) {
+            $this->postJson('/api/update-profile', [
+                'name' => 'Ana',
+                'email' => 'ana@exemplo.com',
+                'hotel' => 'Hotel Aurora',
+                'gender' => $gender,
+            ], $this->auth($ana))->assertOk();
+        }
+
+        foreach (['custom', 'outro'] as $gender) {
+            $this->postJson('/api/update-profile', [
+                'name' => 'Ana',
+                'email' => 'ana@exemplo.com',
+                'hotel' => 'Hotel Aurora',
+                'gender' => $gender,
+            ], $this->auth($ana))
+                ->assertStatus(422)
+                ->assertJsonValidationErrors('gender');
+        }
+
+        // e a entrada segue a mesma regra
+        $this->postJson('/api/join', [
+            'name' => 'Bruno',
+            'email' => 'bruno@exemplo.com',
+            'hotel' => 'Hotel Aurora',
+            'gender' => 'custom',
+            'table_id' => 1,
+        ])->assertStatus(422)->assertJsonValidationErrors('gender');
+
+        $this->assertSame('female', Participant::where('name', 'Ana')->value('gender'));
+    }
+
+    /** O contato de outra pessoa continua sendo dela: a colisão é recusada. */
+    public function test_editing_cannot_steal_another_participants_contact(): void
+    {
+        $ana = $this->join('Ana', 1);
+        $this->join('Bruno', 1);
+
+        $this->postJson('/api/update-profile', [
+            'name' => 'Ana',
+            'email' => 'bruno@exemplo.com',
+            'hotel' => 'Hotel Aurora',
+            'gender' => 'female',
+        ], $this->auth($ana))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('email');
+
+        $this->assertDatabaseHas('participants', ['name' => 'Ana', 'email' => 'ana@exemplo.com']);
+    }
+
+    /**
+     * Aberto o evento, o cadastro congela: o nome já está no telão, o avatar já
+     * é como a mesa reconhece a pessoa e a missão já foi sorteada.
+     */
+    public function test_the_registration_freezes_once_the_event_opens(): void
+    {
+        $ana = $this->join('Ana', 1);
+
+        $this->postJson('/api/admin/open', [], $this->master)->assertOk();
+
+        $this->postJson('/api/update-profile', [
+            'name' => 'Outro Nome',
+            'email' => 'ana@exemplo.com',
+            'hotel' => 'Hotel Aurora',
+            'gender' => 'female',
+        ], $this->auth($ana))->assertStatus(409);
+
+        $this->assertDatabaseHas('participants', ['name' => 'Ana']);
+
+        // mas a mesa continua trocável: ali muda onde a pessoa senta, não quem ela é
+        $this->postJson('/api/change-table', ['table_id' => 2], $this->auth($ana))->assertOk();
+    }
+
+    /** Sem token de participante, nem o próprio cadastro é legível. */
+    public function test_the_profile_endpoints_require_the_device_token(): void
+    {
+        $this->join('Ana', 1);
+
+        $this->getJson('/api/me')->assertStatus(401);
+        $this->postJson('/api/update-profile', [
+            'name' => 'Ana',
+            'email' => 'ana@exemplo.com',
+            'hotel' => 'Hotel Aurora',
+            'gender' => 'female',
+        ])->assertStatus(401);
+    }
+
+    /**
+     * Dez por mesa é o teto: é o tamanho que o rodízio de missões pressupõe e
+     * o limite de uma conversa que precisa fechar em consenso.
+     */
+    public function test_a_table_stops_taking_people_at_ten(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+
+        for ($i = 1; $i <= EventTable::MAX_PARTICIPANTS; $i++) {
+            $this->join("Pessoa {$i}", 1);
+        }
+
+        // a décima primeira é recusada, e a mesa fica exatamente em dez
+        $this->postJson('/api/join', [
+            'name' => 'Tardia',
+            'email' => 'tardia@exemplo.com',
+            'hotel' => 'Hotel Aurora',
+            'gender' => 'female',
+            'table_id' => 1,
+        ])->assertStatus(409);
+
+        $this->assertSame(10, Participant::where('event_table_id', 1)->count());
+        // e nada da pessoa recusada ficou para trás
+        $this->assertDatabaseMissing('participants', ['email' => 'tardia@exemplo.com']);
+
+        // a mesa cheia se anuncia como cheia na tela de cadastro
+        $tables = collect($this->getJson('/api/bootstrap')->assertOk()->json('tables'));
+        $this->assertTrue($tables->firstWhere('id', 1)['full']);
+        $this->assertFalse($tables->firstWhere('id', 2)['full']);
+        $this->assertSame(10, $this->getJson('/api/bootstrap')->json('max_participants'));
+
+        // e a mesa ao lado continua recebendo
+        $this->join('Tardia', 2);
+        $this->assertSame(1, Participant::where('event_table_id', 2)->count());
+    }
+
+    /**
+     * Trocar de mesa: o conserto de quem sentou na errada. Os votos já dados
+     * ficam na mesa em que foram dados — reescrevê-los mudaria o placar de
+     * duas mesas por causa de uma troca de cadeira.
+     */
+    public function test_a_participant_can_change_tables(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+
+        // vota a rodada 1 sentada na mesa 1
+        $this->postJson('/api/admin/start', [], $this->master);
+        $this->postJson('/api/vote', [
+            'option_id' => $this->optionWorth($this->question(1, 1), 150),
+        ], $this->auth($ana))->assertCreated();
+        $this->postJson('/api/admin/reveal', [], $this->master);
+        $this->postJson('/api/admin/next', [], $this->master);
+
+        $this->postJson('/api/change-table', ['table_id' => 2], $this->auth($ana))
+            ->assertOk()
+            ->assertJsonPath('table_id', 2)
+            ->assertJsonPath('status.my_table.id', 2);
+
+        $this->assertSame(2, Participant::where('name', 'Ana')->value('event_table_id'));
+
+        // o voto da rodada 1 continua na mesa 1: foi lá que a decisão aconteceu
+        $this->assertDatabaseHas('participant_votes', ['event_table_id' => 1, 'points' => 150]);
+        $ranking = collect($this->getJson('/api/admin/overview', $this->master)->json('table_ranking'));
+        $this->assertSame(150, $ranking->firstWhere('table_id', 1)['phase_one_points']);
+        $this->assertSame(0, $ranking->firstWhere('table_id', 2)['phase_one_points']);
+
+        // trocar para a mesa em que já se está não é troca
+        $this->postJson('/api/change-table', ['table_id' => 2], $this->auth($ana))
+            ->assertStatus(409);
+    }
+
+    /** A mesa cheia recusa a troca pelo mesmo caminho que recusa a entrada. */
+    public function test_changing_to_a_full_table_is_refused(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 2);
+
+        for ($i = 1; $i <= EventTable::MAX_PARTICIPANTS; $i++) {
+            $this->join("Pessoa {$i}", 1);
+        }
+
+        $this->postJson('/api/change-table', ['table_id' => 1], $this->auth($ana))
+            ->assertStatus(409);
+
+        $this->assertSame(2, Participant::where('name', 'Ana')->value('event_table_id'));
+        $this->assertSame(10, Participant::where('event_table_id', 1)->count());
+    }
+
+    /**
+     * Sair da mesa devolve o posto de representante — ele é da mesa, não da
+     * pessoa. E é por isso que a troca é recusada com a votação aberta: no meio
+     * da rodada, a saída de uma pessoa levaria a decisão da mesa junto.
+     */
+    public function test_changing_tables_releases_the_representative_seat(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+        $this->join('Bruno', 1);
+
+        $this->startPhaseTwo();
+
+        $this->postJson('/api/claim-representative', [], $this->auth($ana))
+            ->assertJsonPath('claimed', true);
+
+        // com a rodada aberta a troca é recusada
+        $this->postJson('/api/change-table', ['table_id' => 2], $this->auth($ana))
+            ->assertStatus(409);
+
+        $this->postJson('/api/admin/close', [], $this->master);
+
+        $this->postJson('/api/change-table', ['table_id' => 2], $this->auth($ana))
+            ->assertOk()
+            ->assertJsonPath('status.me.is_representative', false);
+
+        // a mesa 1 volta a poder eleger quem ficou nela
+        $this->assertNull(EventTable::find(1)->representative_id);
+        $this->assertSame(2, Participant::where('name', 'Ana')->value('event_table_id'));
+    }
+
+    /**
+     * A missão acompanha quem já votou e é resorteada para quem não votou: o
+     * rodízio é por mesa, e quem chega numa mesa nova entra pelo mesmo critério
+     * de quem chega atrasado.
+     */
+    public function test_changing_tables_rebalances_the_mission_only_before_voting(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+
+        // ainda não votou: a missão pode ser reequilibrada na mesa nova
+        $this->postJson('/api/change-table', ['table_id' => 2], $this->auth($ana))->assertOk();
+        $this->assertNotNull(Participant::where('name', 'Ana')->value('mission_id'));
+
+        // depois de votar, a missão fica: ela está congelada em cada voto, e
+        // trocá-la mudaria a pergunta que a pessoa vinha respondendo
+        $this->postJson('/api/admin/start', [], $this->master);
+        $this->postJson('/api/vote', [
+            'option_id' => $this->optionWorth($this->question(1, 1), 150),
+        ], $this->auth($ana))->assertCreated();
+        $this->postJson('/api/admin/close', [], $this->master);
+
+        $mission = Participant::where('name', 'Ana')->value('mission_id');
+
+        $this->postJson('/api/change-table', ['table_id' => 3], $this->auth($ana))->assertOk();
+
+        $this->assertSame($mission, Participant::where('name', 'Ana')->value('mission_id'));
+    }
+
+    /**
      * Seguir sem revelar: a rodada que a conversa já resolveu antes do telão.
      * Nada é apagado, e o voltar traz a rodada de volta — revelada, porque foi
      * jogada. É o que sustenta o botão continuar clicável fora da revelação.

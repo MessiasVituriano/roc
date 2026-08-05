@@ -66,7 +66,9 @@ return new class extends Migration
             $table->foreignId('mission_id')->nullable()->constrained()->nullOnDelete();
             $table->string('name');
             $table->string('email');
-            // male | female | custom — styles the avatar, nothing else
+            // O cadastro escolhe entre male | female — só seleciona o sprite.
+            // O default `custom` é o sprite neutro, para a linha criada fora do
+            // cadastro: ele desenha, mas não é escolhível.
             $table->string('gender')->default('custom');
             $table->string('avatar_seed');
             $table->string('device_token', 64)->unique();

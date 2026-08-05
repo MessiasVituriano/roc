@@ -11,8 +11,10 @@ use App\Models\ParticipantVote;
 use App\Models\TableVote;
 use App\Services\EventFlowService;
 use App\Services\EventStateService;
+use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -42,6 +44,9 @@ class ParticipantController extends Controller
                 'icon' => $t->icon,
                 'color' => $t->color,
                 'participants_count' => $t->participants_count,
+                // a mesa cheia continua na lista, desabilitada: sumir com ela
+                // faria a pessoa procurar uma mesa que ela está vendo na sala
+                'full' => $t->participants_count >= EventTable::MAX_PARTICIPANTS,
             ]);
 
         return response()->json([
@@ -50,8 +55,107 @@ class ParticipantController extends Controller
                 'title' => $event->title,
                 'status' => $event->status,
             ],
+            'max_participants' => EventTable::MAX_PARTICIPANTS,
             'tables' => $tables,
         ]);
+    }
+
+    /**
+     * Ocupa uma cadeira na mesa, ou recusa se ela já estiver completa.
+     *
+     * A contagem roda dentro de uma transação com a linha da mesa travada. Sem
+     * a trava, os celulares que tocam "Entrar" no mesmo segundo passariam
+     * todos pela verificação antes de qualquer um gravar, e a mesa fecharia
+     * com doze — o teto viraria decoração justamente no momento em que ele
+     * importa, que é a corrida de entrada no começo do evento.
+     *
+     * @template T
+     *
+     * @param  Closure(EventTable): T  $seat
+     * @return T
+     */
+    protected function takeSeat(int $tableId, Closure $seat): mixed
+    {
+        return DB::transaction(function () use ($tableId, $seat) {
+            $table = EventTable::whereKey($tableId)->lockForUpdate()->first();
+
+            abort_if(! $table, 404, 'Mesa não encontrada.');
+            abort_if(
+                $table->isFull(),
+                409,
+                "A mesa {$table->name} já está completa (".EventTable::MAX_PARTICIPANTS.' pessoas). Escolha outra.',
+            );
+
+            return $seat($table);
+        });
+    }
+
+    /**
+     * Normaliza o contato **antes** de validar, para que "ANA@x.com" colida com
+     * "ana@x.com" — e "(11) 99999-9999" com "11999999999" — na camada de
+     * validação, em vez de estourar no índice único.
+     *
+     * Campo em branco é campo não preenchido: é o nulo que o índice único deixa
+     * repetir, e é o nulo que faz o *outro* contato virar obrigatório.
+     */
+    protected function normaliseContact(Request $request): void
+    {
+        $email = is_string($request->input('email'))
+            ? mb_strtolower(trim($request->input('email')))
+            : '';
+        $phone = is_string($request->input('phone'))
+            ? $this->normalisePhone($request->input('phone'))
+            : '';
+
+        $request->merge([
+            'email' => $email !== '' ? $email : null,
+            'phone' => $phone !== '' ? $phone : null,
+        ]);
+    }
+
+    /**
+     * Os campos que a pessoa preenche sobre si — na entrada e na edição.
+     *
+     * Um lugar só porque as duas telas fazem a mesma pergunta: a regra do
+     * contato ("e-mail **ou** telefone, único por evento") é sutil o bastante
+     * para que duas cópias divirjam sem ninguém perceber. `$ignore` é o id da
+     * própria pessoa na edição — senão o contato dela colidiria consigo mesmo.
+     *
+     * @return array<string, array<int, mixed>>
+     */
+    protected function profileRules(Event $event, ?int $ignore = null): array
+    {
+        return [
+            'name' => ['required', 'string', 'max:60'],
+            // e-mail **ou** telefone: quem está na operação nem sempre tem
+            // e-mail à mão, e travar a entrada por isso custa gente na sala
+            'email' => [
+                'required_without:phone', 'nullable', 'email:rfc', 'max:120',
+                Rule::unique('participants', 'email')->where('event_id', $event->id)->ignore($ignore),
+            ],
+            'phone' => [
+                'required_without:email', 'nullable', 'digits_between:10,13',
+                Rule::unique('participants', 'phone')->where('event_id', $event->id)->ignore($ignore),
+            ],
+            'hotel' => ['required', 'string', 'max:120'],
+            'gender' => ['required', Rule::in(['male', 'female'])],
+            // optional: lets the join screen show the exact avatar the person will get
+            'avatar_seed' => ['nullable', 'string', 'max:32'],
+        ];
+    }
+
+    /** @return array<string, string> */
+    protected function profileMessages(): array
+    {
+        return [
+            'email.unique' => 'Este e-mail já entrou na dinâmica.',
+            'email.email' => 'Informe um e-mail válido.',
+            'email.required_without' => 'Informe um e-mail ou um telefone.',
+            'phone.unique' => 'Este telefone já entrou na dinâmica.',
+            'phone.digits_between' => 'Informe um telefone válido, com DDD.',
+            'phone.required_without' => 'Informe um e-mail ou um telefone.',
+            'hotel.required' => 'Informe o hotel em que você trabalha.',
+        ];
     }
 
     public function join(Request $request): JsonResponse
@@ -64,53 +168,18 @@ class ParticipantController extends Controller
         // recusa novas entradas.
         abort_if($event->status === Event::STATUS_FINISHED, 423, 'Este evento já foi encerrado.');
 
-        // normalise before validating, so "ANA@x.com" collides with "ana@x.com"
-        // — e para que "(11) 99999-9999" e "11999999999" sejam a mesma pessoa —
-        // na camada de validação, em vez de estourar no índice único
-        $email = is_string($request->input('email'))
-            ? mb_strtolower(trim($request->input('email')))
-            : '';
-        $phone = is_string($request->input('phone'))
-            ? $this->normalisePhone($request->input('phone'))
-            : '';
+        $this->normaliseContact($request);
 
-        // campo em branco é campo não preenchido: é o nulo que o índice único
-        // deixa repetir, e é o nulo que faz o *outro* contato virar obrigatório
-        $request->merge([
-            'email' => $email !== '' ? $email : null,
-            'phone' => $phone !== '' ? $phone : null,
-        ]);
-
-        $data = $request->validate([
-            'name' => ['required', 'string', 'max:60'],
-            // e-mail **ou** telefone: quem está na operação nem sempre tem
-            // e-mail à mão, e travar a entrada por isso custa gente na sala
-            'email' => [
-                'required_without:phone', 'nullable', 'email:rfc', 'max:120',
-                Rule::unique('participants', 'email')->where('event_id', $event->id),
+        $data = $request->validate(
+            $this->profileRules($event) + [
+                'table_id' => ['required', Rule::exists('event_tables', 'id')->where('event_id', $event->id)],
             ],
-            'phone' => [
-                'required_without:email', 'nullable', 'digits_between:10,13',
-                Rule::unique('participants', 'phone')->where('event_id', $event->id),
-            ],
-            'hotel' => ['required', 'string', 'max:120'],
-            'gender' => ['required', Rule::in(['male', 'female', 'custom'])],
-            'table_id' => ['required', Rule::exists('event_tables', 'id')->where('event_id', $event->id)],
-            // optional: lets the join screen show the exact avatar the person will get
-            'avatar_seed' => ['nullable', 'string', 'max:32'],
-        ], [
-            'email.unique' => 'Este e-mail já entrou na dinâmica.',
-            'email.email' => 'Informe um e-mail válido.',
-            'email.required_without' => 'Informe um e-mail ou um telefone.',
-            'phone.unique' => 'Este telefone já entrou na dinâmica.',
-            'phone.digits_between' => 'Informe um telefone válido, com DDD.',
-            'phone.required_without' => 'Informe um e-mail ou um telefone.',
-            'hotel.required' => 'Informe o hotel em que você trabalha.',
-        ]);
+            $this->profileMessages(),
+        );
 
-        $participant = Participant::create([
+        $participant = $this->takeSeat((int) $data['table_id'], fn (EventTable $table) => Participant::create([
             'event_id' => $event->id,
-            'event_table_id' => $data['table_id'],
+            'event_table_id' => $table->id,
             'name' => trim($data['name']),
             'email' => $data['email'] ?? null,
             'phone' => $data['phone'] ?? null,
@@ -120,7 +189,7 @@ class ParticipantController extends Controller
             'device_token' => Str::random(48),
             'connected' => true,
             'last_seen' => now(),
-        ]);
+        ]));
 
         // The seed is frozen at join time, so the avatar never changes afterwards.
         if (! isset($data['avatar_seed'])) {
@@ -137,6 +206,146 @@ class ParticipantController extends Controller
             'participant' => $this->state->participant($participant->refresh()),
             'status' => $this->state->status($event, $participant),
         ], 201);
+    }
+
+    /**
+     * Os próprios dados, para preencher o formulário de edição.
+     *
+     * É o único caminho pelo qual o contato de alguém sai do servidor para um
+     * celular — o dela, com o token dela, sob demanda e fora do poll de 1s. A
+     * regra de sigilo é sobre o contato chegar a *outras* telas; o dono dele
+     * precisa vê-lo para poder corrigi-lo.
+     */
+    public function me(Request $request): JsonResponse
+    {
+        $participant = $this->resolveParticipant($request);
+        abort_if(! $participant, 401, 'Participante não identificado.');
+
+        return response()->json([
+            'name' => $participant->name,
+            'hotel' => $participant->hotel,
+            'gender' => $participant->gender,
+            'avatar_seed' => $participant->avatar_seed,
+            'email' => $participant->email,
+            'phone' => $participant->phone,
+        ]);
+    }
+
+    /**
+     * Corrigir o próprio cadastro — só enquanto o evento não abriu.
+     *
+     * O nome é digitado em pé, no auditório, num celular: sai torto, sai só o
+     * primeiro nome, sai com o hotel errado. Enquanto ninguém votou, consertar
+     * não custa nada.
+     *
+     * Depois de aberto, não. O nome já está no telão e no ranking, o avatar já
+     * é como a mesa reconhece a pessoa, e a missão já foi sorteada — deixar
+     * isso mudar no meio transformaria o placar numa coisa que a sala não
+     * consegue acompanhar. A mesa continua trocável (`/change-table`), porque
+     * ali o que muda é onde a pessoa senta, não quem ela é.
+     */
+    public function updateProfile(Request $request): JsonResponse
+    {
+        $event = $this->state->activeEvent();
+        abort_if(! $event, 404);
+
+        $participant = $this->resolveParticipant($request);
+        abort_if(! $participant, 401, 'Participante não identificado.');
+
+        abort_if(
+            $event->status !== Event::STATUS_DRAFT,
+            409,
+            'O evento já começou — os dados do cadastro não mudam mais.',
+        );
+
+        $this->normaliseContact($request);
+
+        $data = $request->validate(
+            $this->profileRules($event, $participant->id),
+            $this->profileMessages(),
+        );
+
+        $participant->forceFill([
+            'name' => trim($data['name']),
+            'email' => $data['email'] ?? null,
+            'phone' => $data['phone'] ?? null,
+            'hotel' => trim($data['hotel']),
+            'gender' => $data['gender'],
+            // a seed só muda por escolha explícita: sem ela no corpo, o avatar
+            // que a pessoa já tem continua o mesmo
+            'avatar_seed' => $data['avatar_seed'] ?? $participant->avatar_seed,
+        ])->save();
+
+        return response()->json([
+            'participant' => $this->state->participant($participant->refresh()),
+            'status' => $this->state->status($event, $participant),
+        ]);
+    }
+
+    /**
+     * Trocar de mesa depois de entrar — sentou na errada, o colega estava na
+     * outra, a mesa escolhida no cadastro encheu antes de ele chegar nela.
+     *
+     * O que **não** se move junto são os votos já dados: cada linha guarda a
+     * mesa em que a decisão foi tomada, e reescrevê-la mudaria o placar de duas
+     * mesas por causa de uma troca de cadeira. Quem muda no meio do evento
+     * contribuiu de verdade para as duas — as rodadas que jogou em cada uma.
+     */
+    public function changeTable(Request $request): JsonResponse
+    {
+        $event = $this->state->activeEvent();
+        abort_if(! $event, 404);
+
+        $participant = $this->resolveParticipant($request);
+        abort_if(! $participant, 401, 'Participante não identificado.');
+
+        // Trocar com a votação correndo tiraria a pessoa da rodada no meio dela
+        // — e, se ela fosse a representante, levaria a mesa junto, porque o
+        // posto é devolvido na saída. Espera fechar; é questão de segundos.
+        abort_if(
+            $event->isAcceptingVotes(),
+            409,
+            'A rodada está aberta. Espere ela fechar para trocar de mesa.',
+        );
+
+        $data = $request->validate([
+            'table_id' => ['required', Rule::exists('event_tables', 'id')->where('event_id', $event->id)],
+        ]);
+
+        abort_if(
+            (int) $data['table_id'] === $participant->event_table_id,
+            409,
+            'Você já está nesta mesa.',
+        );
+
+        $this->takeSeat((int) $data['table_id'], function (EventTable $table) use ($event, $participant) {
+            $from = $participant->event_table_id;
+
+            $participant->forceFill(['event_table_id' => $table->id])->save();
+
+            // o posto é da mesa, não da pessoa: quem sai devolve a cadeira, e a
+            // mesa antiga volta a poder eleger quem ficou nela
+            EventTable::where('id', $from)
+                ->where('representative_id', $participant->id)
+                ->update(['representative_id' => null]);
+
+            // Quem ainda não votou entra na mesa nova pelo mesmo critério de
+            // quem chega atrasado: o rodízio de missões é por mesa, e
+            // reequilibrá-lo agora não custa nada. Quem já votou mantém a sua —
+            // a missão está congelada em cada voto, e trocá-la no meio mudaria
+            // a pergunta que a pessoa vinha respondendo.
+            if (! $participant->votes()->exists()) {
+                $participant->forceFill(['mission_id' => null])->save();
+                $this->flow->assignMissionTo($event, $participant);
+            }
+        });
+
+        $participant->refresh()->load(['mission', 'table']);
+
+        return response()->json([
+            'table_id' => $participant->event_table_id,
+            'status' => $this->state->status($event, $participant),
+        ]);
     }
 
     /** Polled once per second by the participant screen. */
