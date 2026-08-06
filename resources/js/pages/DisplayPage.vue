@@ -45,9 +45,10 @@ const view = computed(() => {
     if (event.value.round_status === 'voting') return 'voting'
     if (event.value.round_status === 'revealed') return 'reveal'
     if (event.value.answers_revealed) return 'comparison'
-    // fim da Fase 2 com empate na liderança: a sala precisa ver *quem* empatou
-    // antes de entender a rodada a mais. Sem pontuação — ela sai no fecho.
-    if (needsTieBreak.value && event.value.phase >= event.value.last_phase) return 'tiebreak'
+    // Empate na liderança: a sala precisa ver *quem* empatou antes de entender
+    // a rodada a mais. Sem pontuação — ela sai no fecho. O servidor só acende
+    // isso depois da rodada final da Fase 2, então aqui não há fase a conferir.
+    if (needsTieBreak.value) return 'tiebreak'
     if (event.value.missions_revealed) return 'missions'
     return 'lobby'
 })

@@ -600,13 +600,41 @@ class ScoreService
     }
 
     /**
-     * Resumo curto para o telão: quantas mesas ainda empatadas na liderança.
+     * Se o empate na liderança já é notícia.
+     *
+     * Não basta haver empate: até o fim da Fase 2 as mesas empatam o tempo
+     * todo. Na abertura estão todas em zero, e depois disso qualquer duas que
+     * decidam igual empatam de novo. O aviso disparava desde a rodada 1 e
+     * chegava ao fim gasto — alarme que toca a partida inteira não é alarme.
+     *
+     * Ele passa a existir quando o desempate pode de fato acontecer: a sala
+     * chegou à rodada final da Fase 2, ou o evento já foi encerrado.
      *
      * @param  array<int, array<string, mixed>>  $tableRanking
      */
-    public function needsTieBreak(array $tableRanking): bool
+    public function needsTieBreak(Event $event, array $tableRanking): bool
     {
-        return collect($tableRanking)->contains('tied_with_leader', true);
+        return $this->reachedTheDecision($event)
+            && collect($tableRanking)->contains('tied_with_leader', true);
+    }
+
+    /** A sala chegou ao ponto em que um empate decide alguma coisa. */
+    protected function reachedTheDecision(Event $event): bool
+    {
+        if ($event->status === Event::STATUS_FINISHED) {
+            return true;
+        }
+
+        if ($event->phase < Event::LAST_PHASE) {
+            return false;
+        }
+
+        $final = $event->finalQuestion();
+
+        // sem rodada final cadastrada, o fim da fase é o fim dos cenários
+        return $final === null
+            ? $event->current_round >= $event->roundsInPhase(Event::LAST_PHASE)
+            : $event->current_round >= $final->round;
     }
 
     /** @return Collection<int, Mission> */

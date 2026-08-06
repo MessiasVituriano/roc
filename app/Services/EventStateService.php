@@ -279,7 +279,7 @@ class EventStateService
         // mesas ainda estão empatadas, sem pontuação nenhuma. É o que faz a
         // sala entender por que existe uma rodada a mais; mostrar os números
         // junto entregaria o placar antes do fecho.
-        $tied = $this->scores->needsTieBreak($ranking);
+        $tied = $this->scores->needsTieBreak($event, $ranking);
 
         $payload['needs_tie_break'] = $tied;
         $payload['tied_tables'] = $tied

@@ -977,12 +977,29 @@ class ConsensusFlowTest extends TestCase
         $this->assertFalse($this->getJson('/api/admin/overview', $this->master)->json('needs_tie_break'));
     }
 
-    public function test_a_leadership_tie_flags_the_bonus_round(): void
+    /**
+     * O empate na liderança só é notícia no fim.
+     *
+     * Até a rodada final da Fase 2 as mesas empatam o tempo todo: na abertura
+     * estão todas em zero, e depois qualquer duas que decidam igual empatam de
+     * novo. O aviso acendia desde a rodada 1 e chegava ao fim gasto — alarme
+     * que toca a partida inteira não é alarme.
+     */
+    public function test_a_leadership_tie_only_flags_at_the_end_of_phase_two(): void
     {
         $this->postJson('/api/admin/open', [], $this->master);
         $this->join('Ana', 1);
         $this->join('Bruno', 2);
 
+        // sala aberta, ninguém votou: todas as mesas empatadas em zero e o
+        // painel calado
+        $this->assertFalse($this->getJson('/api/admin/overview', $this->master)->json('needs_tie_break'));
+
+        // Fase 1 inteira empatada também não acende
+        $this->postJson('/api/admin/start', [], $this->master);
+        $this->assertFalse($this->getJson('/api/admin/overview', $this->master)->json('needs_tie_break'));
+
+        // nem a Fase 2 antes da rodada final
         $this->postJson('/api/admin/next-phase', [], $this->master);
         $this->postJson('/api/admin/start', [], $this->master);
 
@@ -990,12 +1007,25 @@ class ConsensusFlowTest extends TestCase
         $this->scoreTable(1, 150);
         $this->scoreTable(2, 150);
 
-        $this->assertTrue($this->getJson('/api/admin/overview', $this->master)->json('needs_tie_break'));
+        $this->assertFalse($this->getJson('/api/admin/overview', $this->master)->json('needs_tie_break'));
+
+        // chegando à rodada final, aí sim
+        for ($i = 1; $i < $this->finalRoundNumber(); $i++) {
+            $this->postJson('/api/admin/next', [], $this->master);
+        }
+
+        $overview = $this->getJson('/api/admin/overview', $this->master)->json();
+        $this->assertTrue($overview['needs_tie_break']);
+        $this->assertCount(2, $overview['tied_tables']);
 
         // e a rodada bônus existe para resolver
         $this->postJson('/api/admin/bonus-round', [], $this->master)
             ->assertOk()
             ->assertJsonPath('question.is_bonus', true);
+
+        // depois de encerrar continua valendo: é quando o pódio precisa dele
+        $this->postJson('/api/admin/end', [], $this->master);
+        $this->assertTrue($this->getJson('/api/admin/overview', $this->master)->json('needs_tie_break'));
     }
 
     public function test_the_bonus_round_is_not_reachable_by_next_round(): void
