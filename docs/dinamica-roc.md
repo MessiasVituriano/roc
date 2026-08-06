@@ -71,29 +71,28 @@ justamente o conflito **dentro da mesa** que a rodada final precisa resolver.
   uma régua por alternativa.
 - Gera **pontuação de mesa**, separada da soma individual dos membros.
 
-### Roteiro (~45 min)
+### Roteiro (~31 min)
 
 | Etapa | Tempo | Observação |
 |---|---|---|
 | Abertura e contexto | 1 min | facilitador apresenta o cenário do hotel |
-| Fase 1 — 5 rodadas individuais | 7 min | **60s de votação + ~20s de revelação por rodada** |
+| Fase 1 — 5 rodadas individuais | 8 min | **90s de votação por rodada** |
 | Virada de fase (revelação por grupo de missão) | 2 min | o viés aparece no placar |
-| Fase 2 — os mesmos 5 cenários, em mesa | 12 min | **120s de consenso + ~20s de revelação por rodada** |
-| Fase 2 — rodada final por mesa | 4 min | **2 min de consenso + lançamento da pontuação** |
+| Fase 2 — os mesmos 5 cenários, em mesa | 9 min | **90s de consenso por rodada** |
+| Fase 2 — rodada final por mesa | 3 min | **90s de consenso + lançamento da pontuação** |
 | **O comparativo** (gabarito + confronto das fases) | 3 min | a prova numérica do objetivo 2 |
 | Placar final e desempate | 2 min | critério em 4 níveis |
 | Mensagem de fechamento | 3 min | |
 
-Total ~34 min + margem. O roteiro pressupõe facilitador experiente.
+Total ~31 min + margem. O roteiro pressupõe facilitador experiente.
 
 > **A Fase 2 é a etapa mais longa.** São seis rodadas, não uma. Se o tempo
-> apertar, o corte natural é o relógio de mesa (`PHASE_TWO_DURATION` para 90s
-> economiza ~2,5 min) ou **⏭ Próxima rodada** sem revelar nos cenários em que a
-> mesa fechou rápido — o gabarito de todos eles sai junto no comparativo.
+> apertar, o corte natural é **⏹ Encerrar** assim que as mesas fecharem —
+> raramente as seis precisam dos 90 segundos inteiros.
 
 > Para ajustar os relógios antes de semear: `LiveConsensusSeeder::PHASE_ONE_DURATION`
-> (padrão 60s, cada rodada da Fase 1) e `LiveConsensusSeeder::PHASE_TWO_DURATION`
-> (padrão 120s, todas as rodadas da Fase 2). Ao vivo, **⏹ Encerrar** corta a rodada a qualquer momento e
+> e `LiveConsensusSeeder::PHASE_TWO_DURATION` — **90s** as duas, que é o que o
+> documento da dinâmica especifica. Ao vivo, **⏹ Encerrar** corta a rodada a qualquer momento e
 > **+10s / +30s** a estica. Dentro da rodada aberta, cada pessoa pode trocar a
 > alternativa quantas vezes quiser — vale a última.
 
@@ -187,7 +186,7 @@ Cada alternativa vale pontos fixos. Régua usada em todas as rodadas:
 > quanto a mesa rendeu a mais (ou a menos) que as mesmas pessoas sozinhas meia
 > hora antes. É a prova numérica que a dinâmica promete.
 >
-> O custo é tempo: a Fase 2 passa de ~4 para ~16 min. Quem precisar da versão
+> O custo é tempo: a Fase 2 passa de ~3 para ~12 min. Quem precisar da versão
 > curta do PDF apaga o bloco de espelho em `LiveConsensusSeeder::rounds()`.
 
 Cada mesa responde com **um representante** registrando por todos, na mesma
@@ -214,7 +213,7 @@ acertar, e a escala do lançamento é do facilitador. Misturá-la nas médias fa
 o comparativo medir duas réguas ao mesmo tempo.
 
 ### Desempate — rodada bônus
-Pergunta bônus única, decidida por consenso da mesa em 120 segundos — o mesmo
+Pergunta bônus única, decidida por consenso da mesa em 90 segundos — o mesmo
 relógio da rodada final. **O PDF não
 especifica o conteúdo dessa pergunta.**
 
@@ -223,7 +222,7 @@ especifica o conteúdo dessa pergunta.**
 1. **Maior Valor Gerado Total** — pontuação Fase 1 (individual) + Fase 2 (mesa)
 2. **Maior pontuação na Fase 2** — em caso de empate no total
 3. **Maior evolução Fase 1 → Fase 2** — premia quem mais aprendeu em tempo real
-4. **Rodada de desempate ao vivo** — pergunta bônus, consenso da mesa, 120s
+4. **Rodada de desempate ao vivo** — pergunta bônus, consenso da mesa, 90s
 
 > **Decisão de implementação — diverge do PDF.** O PDF pede “placar sempre
 > visível no telão em tempo real”. Pontuação ao vivo é gabarito ao vivo: numa

@@ -28,6 +28,12 @@ class Event extends Model
 
     protected $guarded = [];
 
+    /** Os conjuntos de conteúdo cadastrados, para a tela de seleção agrupar. */
+    public const SOURCES = [
+        'roc-sp-2026' => 'ROC SP 2026',
+        'roc-original' => 'Conjunto anterior',
+    ];
+
     protected function casts(): array
     {
         return [
@@ -35,6 +41,7 @@ class Event extends Model
             'current_round' => 'integer',
             'round_duration' => 'integer',
             'missions_revealed' => 'boolean',
+            'phase_one_revealed' => 'boolean',
             'answers_revealed' => 'boolean',
             'round_started_at' => 'datetime',
             'round_ends_at' => 'datetime',
@@ -82,6 +89,9 @@ class Event extends Model
             ->with('options')
             ->where('phase', $phase)
             ->where('round', $round)
+            // desligada não é alcançável pelo roteiro: ela continua no banco
+            // (com os votos, se já foi jogada) mas some do caminho das rodadas
+            ->where('active', true)
             ->when(! $includeBonus, fn ($q) => $q->where('is_bonus', false))
             ->first();
     }
@@ -94,6 +104,7 @@ class Event extends Model
     {
         return $this->questions()
             ->where('manual_scoring', true)
+            ->where('active', true)
             ->orderBy('phase')
             ->orderBy('round')
             ->first();
@@ -104,6 +115,7 @@ class Event extends Model
         return $this->questions()
             ->where('phase', $phase ?? $this->phase)
             ->where('is_bonus', false)
+            ->where('active', true)
             ->count();
     }
 

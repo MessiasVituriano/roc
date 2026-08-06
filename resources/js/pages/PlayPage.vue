@@ -161,6 +161,19 @@ async function claim() {
     }
 }
 
+// O total da Fase 1, quando o facilitador a encerra. Só o total: o gabarito e
+// quanto valeu cada pergunta continuam trancados até o fecho.
+const phaseOneScore = computed(
+    () => (event.value?.phase_one_revealed && me.value?.total_points !== null
+        ? me.value?.total_points
+        : null),
+)
+
+// o material que a pessoa leva: as decisões dela com as justificativas
+function myAnswersPdf() {
+    window.open(`/api/my-answers.pdf?token=${encodeURIComponent(participantToken.get() ?? '')}`, '_blank')
+}
+
 function leave() {
     participantToken.clear()
     router.replace('/')
@@ -372,6 +385,21 @@ async function switchTo(id) {
                         <p class="text-slate-400 text-sm px-4">
                             Fase {{ event?.phase }} · rodada {{ event?.round }} de {{ event?.total_rounds }}
                         </p>
+                        <!--
+                            A Fase 1 fechada devolve o próprio total. É a única
+                            notícia que a pessoa recebe sobre si antes do fecho —
+                            e é o que dá sentido a decidir em mesa depois.
+                        -->
+                        <div
+                            v-if="phaseOneScore !== null"
+                            class="mx-4 rounded-2xl bg-sky-500/10 ring-1 ring-sky-400/40 px-5 py-4"
+                        >
+                            <p class="text-[10px] uppercase tracking-widest text-sky-300">Sua Fase 1</p>
+                            <p class="text-4xl font-black text-white tabular-nums">{{ phaseOneScore }}</p>
+                            <p class="text-[11px] text-slate-400">
+                                pontos decidindo sozinho · o gabarito sai no fim
+                            </p>
+                        </div>
                         <button
                             v-if="canSwitchTable"
                             class="text-xs text-slate-500 underline hover:text-slate-300 transition"
@@ -632,6 +660,15 @@ async function switchTo(id) {
                                 <p class="text-[10px] text-slate-500 mt-0.5">pontos na Fase 1</p>
                             </div>
                         </div>
+                        <button
+                            class="w-full rounded-2xl px-5 py-4 font-black text-white bg-gradient-to-r from-sky-500 to-indigo-500 hover:brightness-110 active:scale-95 transition"
+                            @click="myAnswersPdf"
+                        >
+                            📄 Baixar minhas decisões (PDF)
+                        </button>
+                        <p class="text-[11px] text-slate-500 -mt-1">
+                            As cinco decisões, o que cada alternativa gerava e a melhor de cada rodada.
+                        </p>
                         <button class="text-xs text-slate-500 underline pt-2" @click="leave">Sair</button>
                         <div class="grid place-items-center pt-4">
                             <BrandLogo size="sm" stacked />

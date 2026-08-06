@@ -3,13 +3,13 @@
 Dinâmica de decisão para auditórios, conduzida ao vivo por um facilitador.
 Especificação de conteúdo e regras: [`docs/dinamica-roc.md`](docs/dinamica-roc.md).
 
-- **Fase 1 — individual.** 5 rodadas sincronizadas (60s de voto + revelação).
+- **Fase 1 — individual.** 5 rodadas sincronizadas de 90s.
   Cada pessoa recebe uma **missão sorteada** e decide com ela, e pode trocar a
   escolha enquanto o cronômetro corre.
 - **Virada de fase.** O placar **por grupo de missão** vai ao telão: mesma
   régua, missões diferentes, decisões diferentes.
 - **Fase 2 — em mesa.** As **mesmas cinco perguntas**, agora decididas por
-  consenso pela mesa (2 min cada), com o **representante** registrando por
+  consenso pela mesa (90s cada), com o **representante** registrando por
   todos. Fecha com a **rodada final**: uma 6ª pergunta **sem alternativas** —
   a missão que funde as 4 missões da Fase 1 —, **lançada mesa a mesa pelo
   facilitador** no painel.

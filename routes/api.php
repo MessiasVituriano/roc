@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AdminController;
 use App\Http\Controllers\Api\DisplayController;
 use App\Http\Controllers\Api\ParticipantController;
+use App\Http\Controllers\Api\PdfController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -24,9 +25,18 @@ Route::post('/update-profile', [ParticipantController::class, 'updateProfile']);
 
 Route::get('/display', DisplayController::class);
 
+// o material que a pessoa leva do evento: as decisões dela com as
+// justificativas, liberado junto com o gabarito
+Route::get('/my-answers.pdf', [PdfController::class, 'myAnswers']);
+
 Route::prefix('admin')->middleware('master')->group(function () {
     Route::get('/overview', [AdminController::class, 'overview']);
     Route::get('/questions', [AdminController::class, 'questions']);
+    // o acervo e a seleção: o evento tem mais perguntas cadastradas do que joga
+    Route::get('/question-catalog', [AdminController::class, 'questionCatalog']);
+    Route::post('/question-catalog', [AdminController::class, 'selectQuestions']);
+    // recarrega o conteúdo do seeder sem apagar quem já está na sala
+    Route::post('/reload-questions', [AdminController::class, 'reloadQuestions']);
     Route::get('/tables/{table}', [AdminController::class, 'table']);
 
     // fluxo da rodada
@@ -45,6 +55,9 @@ Route::prefix('admin')->middleware('master')->group(function () {
     Route::post('/missions/assign', [AdminController::class, 'assignMissions']);
     Route::post('/missions/reveal', [AdminController::class, 'revealMissions']);
     Route::post('/missions/hide', [AdminController::class, 'hideMissions']);
+    // o fecho da Fase 1: cada pessoa recebe o próprio total, sem gabarito
+    Route::post('/phase-one/reveal', [AdminController::class, 'revealPhaseOne']);
+    Route::post('/phase-one/hide', [AdminController::class, 'hidePhaseOne']);
     Route::post('/answers/reveal', [AdminController::class, 'revealAnswers']);
     Route::post('/answers/hide', [AdminController::class, 'hideAnswers']);
     Route::post('/next-phase', [AdminController::class, 'nextPhase']);
@@ -52,6 +65,8 @@ Route::prefix('admin')->middleware('master')->group(function () {
     Route::post('/final-score', [AdminController::class, 'finalScore']);
     Route::post('/bonus-round', [AdminController::class, 'bonusRound']);
     Route::post('/end', [AdminController::class, 'end']);
+    // a lista de contatos: o único lugar em que o contato de todo mundo sai junto
+    Route::get('/contacts.pdf', [PdfController::class, 'contacts']);
 
     // pessoas: tira do ranking individual sem tirar da dinâmica
     Route::post('/participants/{participant}/block', [AdminController::class, 'blockParticipant']);

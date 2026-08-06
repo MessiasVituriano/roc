@@ -136,7 +136,9 @@ class ScoreService
             ->keyBy('participant_id');
 
         $correct = $this->correctBy($event, ParticipantVote::class, 'participant_id', phase: 1);
-        $rounds = $event->questions()->where('phase', 1)->where('is_bonus', false)->count();
+        $rounds = $event->questions()
+            ->where('phase', 1)->where('is_bonus', false)->where('active', true)
+            ->count();
 
         // A Fase 2 não tem voto individual — a mesa decide por todos. Para ver
         // uma pessoa por inteiro é preciso somar o que ela fez sozinha com o que
@@ -375,36 +377,97 @@ class ScoreService
     }
 
     /**
-     * Critério de vitória, em 4 níveis:
+     * Critério de vitória:
      *   1. maior Valor Gerado Total (Fase 1 + Fase 2)
      *   2. maior pontuação na Fase 2
      *   3. maior evolução Fase 1 → Fase 2
-     *   4. rodada de desempate ao vivo (fora do sistema: o facilitador roda a
-     *      pergunta bônus, cujo resultado entra como pontuação de Fase 2)
+     *   4. as duas rodadas de desempate ao vivo — fora do sistema: o
+     *      facilitador roda as perguntas bônus, cujo resultado entra como
+     *      pontuação de Fase 2 e reordena por 1 e 2
+     *   5. maior **pontuação individual** da mesa (o que os membros fizeram
+     *      sozinhos na Fase 1)
      *
-     * `tied_with_leader` marca quem chegou ao nível 4 ainda empatado — é o
-     * gatilho para o facilitador rodar a pergunta bônus.
+     * O quinto existe porque as perguntas de desempate podem empatar de novo, e
+     * empatar de novo com a sala olhando é o pior lugar para descobrir que não
+     * há critério seguinte. Ele não precisa de pergunta nova: o número já está
+     * no placar desde a Fase 1.
+     *
+     * `tied_with_leader` marca quem chegou ao fim dos cinco ainda empatado —
+     * aí só sobra a decisão do facilitador, com a lista das pessoas na mão.
      */
     protected function applyTieBreak(array $rows): array
     {
-        usort($rows, function (array $a, array $b) {
-            return [$b['total_points'], $b['phase_two_points'], $b['evolution']]
-                <=> [$a['total_points'], $a['phase_two_points'], $a['evolution']];
-        });
+        $key = fn (array $r) => [
+            $r['total_points'], $r['phase_two_points'], $r['evolution'], $r['phase_one_points'],
+        ];
+
+        usort($rows, fn (array $a, array $b) => $key($b) <=> $key($a));
 
         $leader = $rows[0] ?? null;
 
         return collect($rows)
-            ->map(function (array $row, int $i) use ($leader) {
-                $tied = $leader !== null
-                    && $row['total_points'] === $leader['total_points']
-                    && $row['phase_two_points'] === $leader['phase_two_points']
-                    && $row['evolution'] === $leader['evolution'];
+            ->map(function (array $row, int $i) use ($leader, $key) {
+                $tied = $leader !== null && $key($row) === $key($leader);
 
                 return $row + [
                     'position' => $i + 1,
-                    // empate que sobrevive aos três primeiros critérios
+                    // empate que sobrevive a todos os critérios automáticos
                     'tied_with_leader' => $tied && $i > 0,
+                ];
+            })
+            ->all();
+    }
+
+    /**
+     * As mesas ainda empatadas na liderança, com as pessoas de cada uma.
+     *
+     * É o que o facilitador precisa ter na mão quando os cinco critérios não
+     * resolveram: quem exatamente compõe cada mesa empatada e quanto cada um
+     * fez sozinho. Sem isso, a decisão final vira "escolhe uma" na frente de
+     * 150 pessoas.
+     *
+     * @param  array<int, array<string, mixed>>  $tableRanking
+     * @return array<int, array<string, mixed>>
+     */
+    public function tieBreakDetail(Event $event, array $tableRanking): array
+    {
+        $tied = collect($tableRanking)
+            ->filter(fn (array $row) => $row['tied_with_leader'] || $row['position'] === 1)
+            ->filter(fn (array $row) => collect($tableRanking)->contains('tied_with_leader', true))
+            ->values();
+
+        if ($tied->count() < 2) {
+            return [];
+        }
+
+        $people = $this->individualRanking($event, forMaster: true);
+
+        return $tied
+            ->map(function (array $row) use ($people) {
+                $members = collect($people)
+                    ->where('table', $row['name'])
+                    ->sortByDesc('points')
+                    ->values()
+                    ->map(fn (array $p) => [
+                        'participant_id' => $p['participant_id'],
+                        'name' => $p['name'],
+                        'avatar_seed' => $p['avatar_seed'],
+                        'gender' => $p['gender'],
+                        'points' => $p['points'],
+                        'blocked' => $p['blocked'],
+                    ])
+                    ->all();
+
+                return [
+                    'table_id' => $row['table_id'],
+                    'name' => $row['name'],
+                    'icon' => $row['icon'],
+                    'color' => $row['color'],
+                    'total_points' => $row['total_points'],
+                    'phase_one_points' => $row['phase_one_points'],
+                    // o melhor individual da mesa: o número que decide o 5º nível
+                    'best_individual' => $members[0]['points'] ?? 0,
+                    'members' => $members,
                 ];
             })
             ->all();
@@ -537,13 +600,41 @@ class ScoreService
     }
 
     /**
-     * Resumo curto para o telão: quantas mesas ainda empatadas na liderança.
+     * Se o empate na liderança já é notícia.
+     *
+     * Não basta haver empate: até o fim da Fase 2 as mesas empatam o tempo
+     * todo. Na abertura estão todas em zero, e depois disso qualquer duas que
+     * decidam igual empatam de novo. O aviso disparava desde a rodada 1 e
+     * chegava ao fim gasto — alarme que toca a partida inteira não é alarme.
+     *
+     * Ele passa a existir quando o desempate pode de fato acontecer: a sala
+     * chegou à rodada final da Fase 2, ou o evento já foi encerrado.
      *
      * @param  array<int, array<string, mixed>>  $tableRanking
      */
-    public function needsTieBreak(array $tableRanking): bool
+    public function needsTieBreak(Event $event, array $tableRanking): bool
     {
-        return collect($tableRanking)->contains('tied_with_leader', true);
+        return $this->reachedTheDecision($event)
+            && collect($tableRanking)->contains('tied_with_leader', true);
+    }
+
+    /** A sala chegou ao ponto em que um empate decide alguma coisa. */
+    protected function reachedTheDecision(Event $event): bool
+    {
+        if ($event->status === Event::STATUS_FINISHED) {
+            return true;
+        }
+
+        if ($event->phase < Event::LAST_PHASE) {
+            return false;
+        }
+
+        $final = $event->finalQuestion();
+
+        // sem rodada final cadastrada, o fim da fase é o fim dos cenários
+        return $final === null
+            ? $event->current_round >= $event->roundsInPhase(Event::LAST_PHASE)
+            : $event->current_round >= $final->round;
     }
 
     /** @return Collection<int, Mission> */

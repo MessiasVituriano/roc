@@ -98,11 +98,17 @@ class EventStateService
                 'has_voted' => $mine !== null,
                 'voted_option_id' => $mine?->option_id,
                 // Os pontos da própria escolha entregam o gabarito tão bem
-                // quanto o selo de "melhor decisão" — e o total acumulado
-                // entrega por diferença, rodada a rodada. Os dois só aparecem
-                // no fim.
+                // quanto o selo de "melhor decisão", e o acerto entrega direto:
+                // os dois só saem no fecho do evento.
+                //
+                // O **total** é a exceção, e por isso tem porta própria. Ele sai
+                // no fecho da Fase 1, quando as cinco rodadas já acabaram: 450
+                // pontos não identificam a melhor alternativa de nenhuma delas,
+                // enquanto o valor de uma rodada isolada identificaria.
                 'round_points' => $key ? $mine?->points : null,
-                'total_points' => $key ? $this->scores->participantPoints($event, $participant) : null,
+                'total_points' => $key || $event->phase_one_revealed
+                    ? $this->scores->participantPoints($event, $participant)
+                    : null,
                 'correct' => $key ? $this->scores->participantCorrect($event, $participant) : null,
                 'rounds' => $event->roundsInPhase(1),
                 'mission' => $mission ? [
@@ -213,8 +219,15 @@ class EventStateService
         // disfarçado: numa mesa pequena, `phase_one_points` depois da rodada 1
         // identifica a alternativa certa por aritmética. Vai para o telão só no
         // encerramento; o facilitador tem sempre.
+        //
+        // O ranking é calculado sempre, mas só **publicado** quando o gabarito
+        // abre: o telão precisa saber do empate na liderança antes disso (é o
+        // que explica a rodada a mais), e para isso basta o fato, não os
+        // números.
+        $ranking = $this->scores->tableRanking($event);
+
         if ($this->showsAnswerKey($event, $forMaster)) {
-            $payload['table_ranking'] = $this->scores->tableRanking($event);
+            $payload['table_ranking'] = $ranking;
             $payload['phase_comparison'] = $this->scores->phaseComparison($event);
         }
 
@@ -262,8 +275,30 @@ class EventStateService
             );
         }
 
+        // O empate na liderança vai também ao telão — mas só o **fato**: quais
+        // mesas ainda estão empatadas, sem pontuação nenhuma. É o que faz a
+        // sala entender por que existe uma rodada a mais; mostrar os números
+        // junto entregaria o placar antes do fecho.
+        $tied = $this->scores->needsTieBreak($event, $ranking);
+
+        $payload['needs_tie_break'] = $tied;
+        $payload['tied_tables'] = $tied
+            ? collect($ranking)
+                ->filter(fn (array $row) => $row['tied_with_leader'] || $row['position'] === 1)
+                ->map(fn (array $row) => [
+                    'table_id' => $row['table_id'],
+                    'name' => $row['name'],
+                    'icon' => $row['icon'],
+                    'color' => $row['color'],
+                ])
+                ->values()
+                ->all()
+            : [];
+
         if ($forMaster) {
-            $payload['needs_tie_break'] = $this->scores->needsTieBreak($payload['table_ranking']);
+            // as mesas ainda empatadas, com as pessoas de cada uma: é a última
+            // alternativa do critério de vitória, e ela é do facilitador
+            $payload['tie_break'] = $this->scores->tieBreakDetail($event, $ranking);
         }
 
         return $payload;
@@ -284,6 +319,7 @@ class EventStateService
                 : Question::MODE_CONSENSUS,
             'last_phase' => Event::LAST_PHASE,
             'missions_revealed' => $event->missions_revealed,
+            'phase_one_revealed' => $event->phase_one_revealed,
             'answers_revealed' => $event->answers_revealed,
             'voting_open' => $event->isAcceptingVotes(),
         ];
@@ -426,6 +462,7 @@ class EventStateService
             ->with('options')
             ->where('phase', 1)
             ->where('is_bonus', false)
+            ->where('active', true)
             ->orderBy('round')
             ->get();
 
@@ -435,6 +472,7 @@ class EventStateService
             ->where('phase', 2)
             ->where('is_bonus', false)
             ->where('manual_scoring', false)
+            ->where('active', true)
             ->get()
             ->keyBy('round');
 
@@ -520,6 +558,7 @@ class EventStateService
             'round' => $question->round,
             'mode' => $question->mode,
             'label' => $question->label,
+            'source' => $question->source,
             'title' => $question->title,
             'context' => $question->context,
             'duration' => $question->duration,
