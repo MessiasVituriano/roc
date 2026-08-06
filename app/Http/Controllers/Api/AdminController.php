@@ -7,6 +7,7 @@ use App\Models\Event;
 use App\Models\EventTable;
 use App\Models\Participant;
 use App\Models\ParticipantVote;
+use App\Models\Question;
 use App\Models\TableVote;
 use App\Services\EventFlowService;
 use App\Services\EventStateService;
@@ -120,13 +121,133 @@ class AdminController extends Controller
     }
 
     /** Carrega a pergunta bônus (4º critério de desempate). */
-    public function bonusRound(): JsonResponse
+    public function bonusRound(Request $request): JsonResponse
     {
+        $data = $request->validate(['which' => ['nullable', 'integer', 'in:1,2']]);
+
         try {
-            return $this->respond($this->flow->loadBonusRound($this->requireEvent()));
+            return $this->respond($this->flow->loadBonusRound(
+                $this->requireEvent(),
+                (int) ($data['which'] ?? 1),
+            ));
         } catch (RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 409);
         }
+    }
+
+    /**
+     * Fecha a Fase 1 devolvendo a cada pessoa o próprio total — e só ele.
+     * O gabarito continua atrás do clique do fecho.
+     */
+    public function revealPhaseOne(): JsonResponse
+    {
+        return $this->respond($this->flow->revealPhaseOne($this->requireEvent()));
+    }
+
+    public function hidePhaseOne(): JsonResponse
+    {
+        return $this->respond($this->flow->hidePhaseOne($this->requireEvent()));
+    }
+
+    /**
+     * O acervo de perguntas, para a tela de seleção.
+     *
+     * Um cenário é **um par**: a mesma pergunta na Fase 1 e na Fase 2. Elas
+     * ligam e desligam juntas — o comparativo do fecho compara a mesma pergunta
+     * dos dois lados, e deixar um lado ativo sem o outro o quebraria em
+     * silêncio. Por isso a lista é de cenários, não de perguntas.
+     */
+    public function questionCatalog(): JsonResponse
+    {
+        $event = $this->requireEvent();
+
+        $scenarios = $event->questions()
+            ->with('options')
+            ->whereNotNull('scenario_key')
+            ->where('phase', 1)
+            ->orderBy('round')
+            ->get()
+            ->map(fn (Question $q) => [
+                'scenario_key' => $q->scenario_key,
+                'source' => $q->source,
+                'label' => $q->label,
+                'title' => $q->title,
+                'context' => $q->context,
+                'active' => (bool) $q->active,
+                'round' => $q->round,
+                'options' => $q->options->sortByDesc('points')->pluck('text')->values(),
+            ]);
+
+        $bonus = $event->questions()
+            ->with('options')
+            ->where('is_bonus', true)
+            ->orderBy('round')
+            ->get()
+            ->map(fn (Question $q) => [
+                'id' => $q->id,
+                'source' => $q->source,
+                'label' => $q->label,
+                'title' => $q->title,
+                'context' => $q->context,
+                'active' => (bool) $q->active,
+            ]);
+
+        return response()->json([
+            'sources' => Event::SOURCES,
+            'scenarios' => $scenarios,
+            'tie_breaks' => $bonus,
+        ]);
+    }
+
+    /**
+     * Troca a seleção: quais cenários e quais desempates o evento joga.
+     *
+     * Renumera na saída, para as rodadas ativas voltarem contíguas — é por
+     * `round`, um número de cada vez, que o evento anda.
+     */
+    public function selectQuestions(Request $request): JsonResponse
+    {
+        $event = $this->requireEvent();
+
+        $data = $request->validate([
+            'scenarios' => ['present', 'array'],
+            'scenarios.*' => ['string'],
+            'tie_breaks' => ['present', 'array'],
+            'tie_breaks.*' => ['integer'],
+        ]);
+
+        abort_if(
+            $data['scenarios'] === [],
+            422,
+            'Selecione pelo menos um cenário — sem nenhum não há evento a conduzir.',
+        );
+
+        $event->questions()->whereNotNull('scenario_key')->update(['active' => false]);
+        $event->questions()->whereNotNull('scenario_key')
+            ->whereIn('scenario_key', $data['scenarios'])->update(['active' => true]);
+
+        $event->questions()->where('is_bonus', true)->update(['active' => false]);
+        $event->questions()->where('is_bonus', true)
+            ->whereIn('id', $data['tie_breaks'])->update(['active' => true]);
+
+        $this->flow->renumberRounds($event);
+
+        // a rodada corrente pode ter saído da seleção: o evento volta ao começo
+        // da fase em que está, que é o único ponto seguro
+        $event->refresh();
+
+        if (! $event->questionFor($event->phase, $event->current_round)) {
+            $first = $event->questionFor($event->phase, 1);
+            $event->update([
+                'current_round' => 1,
+                'current_question_id' => $first?->id,
+                'round_status' => Event::ROUND_IDLE,
+                'round_started_at' => null,
+                'round_ends_at' => null,
+            ]);
+        }
+
+        return $this->respond($event->refresh());
     }
 
     /**

@@ -8,6 +8,7 @@ use App\Models\Mission;
 use App\Models\Participant;
 use App\Models\Question;
 use Database\Seeders\LiveConsensusSeeder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Illuminate\Testing\TestResponse;
@@ -44,7 +45,33 @@ class ConsensusFlowTest extends TestCase
 
     protected function question(int $phase, int $round): Question
     {
-        return Question::with('options')->where('phase', $phase)->where('round', $round)->firstOrFail();
+        return Question::with('options')
+            ->where('phase', $phase)->where('round', $round)->where('active', true)
+            ->firstOrFail();
+    }
+
+    /**
+     * As perguntas de uma fase que o evento realmente joga.
+     *
+     * O banco carrega mais conteúdo do que o roteiro usa — dois conjuntos de
+     * cenários e dois pares de desempate —, então todo teste de estrutura fala
+     * das **ativas**, que é o que o facilitador selecionou.
+     *
+     * @return Collection<int, Question>
+     */
+    protected function activeQuestions(int $phase): Collection
+    {
+        return Question::with('options')
+            ->where('phase', $phase)->where('active', true)
+            ->where('is_bonus', false)->where('manual_scoring', false)
+            ->orderBy('round')
+            ->get();
+    }
+
+    /** A rodada em que a final cai — depois de todos os cenários ativos. */
+    protected function finalRoundNumber(): int
+    {
+        return (int) Question::where('manual_scoring', true)->where('active', true)->value('round');
     }
 
     /** Uma alternativa por pontuação, para os testes não dependerem da ordem. */
@@ -75,11 +102,11 @@ class ConsensusFlowTest extends TestCase
     {
         $this->postJson('/api/admin/next-phase', [], $this->master);
 
-        for ($i = 1; $i < 6; $i++) {
+        for ($i = 1; $i < $this->finalRoundNumber(); $i++) {
             $this->postJson('/api/admin/next', [], $this->master);
         }
 
-        return $this->question(2, 6);
+        return $this->question(2, $this->finalRoundNumber());
     }
 
     /** A rodada final é pontuada à mão: o placar dela passa por aqui. */
@@ -835,18 +862,18 @@ class ConsensusFlowTest extends TestCase
             ->assertOk()
             ->assertJsonPath('event.phase', 2)
             // cinco cenários de mesa + a rodada final; o desempate fica fora
-            ->assertJsonPath('event.total_rounds', 6)
+            ->assertJsonPath('event.total_rounds', $this->finalRoundNumber())
             ->assertJsonPath('event.phase_mode', 'consensus')
             ->assertJsonPath('question.manual_scoring', false);
 
         // a final é o fim da fase: chega-se nela depois de rejogar os cinco
-        for ($i = 1; $i < 6; $i++) {
+        for ($i = 1; $i < $this->finalRoundNumber(); $i++) {
             $this->postJson('/api/admin/next', [], $this->master);
         }
 
         $this->postJson('/api/admin/start', [], $this->master)
             ->assertOk()
-            ->assertJsonPath('event.round', 6)
+            ->assertJsonPath('event.round', $this->finalRoundNumber())
             ->assertJsonPath('question.manual_scoring', true);
 
         // o celular só exibe a missão: não há alternativa nem representante
@@ -976,18 +1003,18 @@ class ConsensusFlowTest extends TestCase
         $this->postJson('/api/admin/open', [], $this->master);
         $this->postJson('/api/admin/next-phase', [], $this->master)
             ->assertOk()
-            ->assertJsonPath('event.total_rounds', 6);
+            ->assertJsonPath('event.total_rounds', $this->finalRoundNumber());
 
         // "próxima rodada" atravessa os cinco cenários e para na final: o
         // desempate fica fora da contagem e só entra pelo botão do painel
-        for ($i = 1; $i < 6; $i++) {
+        for ($i = 1; $i < $this->finalRoundNumber(); $i++) {
             $this->postJson('/api/admin/next', [], $this->master);
         }
 
         // a sexta é a última: daqui "próxima" não anda mais
         $this->postJson('/api/admin/next', [], $this->master)
             ->assertOk()
-            ->assertJsonPath('event.round', 6)
+            ->assertJsonPath('event.round', $this->finalRoundNumber())
             ->assertJsonPath('question.is_bonus', false)
             ->assertJsonPath('question.manual_scoring', true);
 
@@ -1015,6 +1042,56 @@ class ConsensusFlowTest extends TestCase
     }
 
     /**
+     * O evento carrega mais perguntas do que joga, e o facilitador escolhe.
+     *
+     * Dois conjuntos de cenários e dois pares de desempate convivem no banco;
+     * só os selecionados entram no roteiro. Trocar a seleção renumera as
+     * rodadas, porque o evento anda por `round`, um número de cada vez — um
+     * buraco na sequência pararia o roteiro no lugar do buraco.
+     */
+    public function test_the_facilitator_picks_which_questions_the_event_plays(): void
+    {
+        $catalog = $this->getJson('/api/admin/question-catalog', $this->master)->assertOk()->json();
+
+        // os dois conjuntos existem, e só um está ativo
+        $sources = collect($catalog['scenarios'])->pluck('source')->unique()->values();
+        $this->assertCount(2, $sources);
+        $this->assertSame(5, collect($catalog['scenarios'])->where('active', true)->count());
+        $this->assertSame(2, collect($catalog['tie_breaks'])->where('active', true)->count());
+
+        // trocar para o outro conjunto
+        $outro = collect($catalog['scenarios'])->where('active', false);
+        $outroBonus = collect($catalog['tie_breaks'])->where('active', false);
+
+        $this->postJson('/api/admin/question-catalog', [
+            'scenarios' => $outro->pluck('scenario_key')->all(),
+            'tie_breaks' => $outroBonus->pluck('id')->all(),
+        ], $this->master)->assertOk()->assertJsonPath('event.total_rounds', 5);
+
+        // as ativas voltam contíguas: cenários, final, desempates
+        $active = Question::where('active', true)->where('phase', 2)->orderBy('round')->get();
+        $this->assertSame(range(1, $active->count()), $active->pluck('round')->all());
+        $this->assertTrue($active->firstWhere('manual_scoring', true)->round === 6);
+        $this->assertSame([7, 8], $active->where('is_bonus', true)->pluck('round')->values()->all());
+
+        // e o roteiro anda pelo conjunto novo, sem cair nas desligadas
+        $this->postJson('/api/admin/open', [], $this->master);
+
+        for ($round = 1; $round <= 5; $round++) {
+            $this->postJson('/api/admin/start', [], $this->master)
+                ->assertOk()
+                ->assertJsonPath('event.round', $round)
+                ->assertJsonPath('question.source', $outro->first()['source']);
+            $this->postJson('/api/admin/next', [], $this->master);
+        }
+
+        // seleção vazia não é evento
+        $this->postJson('/api/admin/question-catalog', [
+            'scenarios' => [], 'tie_breaks' => [],
+        ], $this->master)->assertStatus(422);
+    }
+
+    /**
      * A estrutura do evento: os mesmos cinco cenários jogados duas vezes —
      * sozinho na Fase 1, em mesa na Fase 2 — e a rodada final fechando.
      *
@@ -1024,10 +1101,8 @@ class ConsensusFlowTest extends TestCase
      */
     public function test_phase_two_replays_the_same_five_scenarios_in_consensus(): void
     {
-        $phaseOne = Question::with('options')->where('phase', 1)->orderBy('round')->get();
-        $phaseTwo = Question::with('options')
-            ->where('phase', 2)->where('is_bonus', false)->where('manual_scoring', false)
-            ->orderBy('round')->get();
+        $phaseOne = $this->activeQuestions(1);
+        $phaseTwo = $this->activeQuestions(2);
 
         $this->assertCount(5, $phaseOne);
         $this->assertCount(5, $phaseTwo);
@@ -1076,7 +1151,7 @@ class ConsensusFlowTest extends TestCase
 
         $this->postJson('/api/admin/next-phase', [], $this->master)
             ->assertOk()
-            ->assertJsonPath('event.total_rounds', 6);
+            ->assertJsonPath('event.total_rounds', $this->finalRoundNumber());
 
         for ($round = 1; $round <= 5; $round++) {
             $this->postJson('/api/admin/start', [], $this->master)
@@ -1099,7 +1174,7 @@ class ConsensusFlowTest extends TestCase
         // cinco decisões de mesa, e a sexta rodada é a final
         $this->assertDatabaseCount('table_votes', 5);
         $this->getJson('/api/admin/overview', $this->master)
-            ->assertJsonPath('event.round', 6)
+            ->assertJsonPath('event.round', $this->finalRoundNumber())
             ->assertJsonPath('question.manual_scoring', true);
 
         // o posto foi assumido uma vez e valeu para as cinco
@@ -1180,10 +1255,10 @@ class ConsensusFlowTest extends TestCase
     /** A rodada final fecha a Fase 2: a sexta, sem alternativas e pontuada à mão. */
     public function test_the_final_round_closes_phase_two_without_alternatives(): void
     {
-        $final = Question::with('options')->where('manual_scoring', true)->firstOrFail();
+        $final = Question::with('options')->where('manual_scoring', true)->where('active', true)->firstOrFail();
 
         $this->assertSame(2, $final->phase);
-        $this->assertSame(6, $final->round);
+        $this->assertSame($this->activeQuestions(2)->count() + 1, $final->round);
         $this->assertSame(Question::MODE_CONSENSUS, $final->mode);
         $this->assertTrue($final->isManual());
         // sem alternativas: a mesa decide livremente
@@ -1191,9 +1266,9 @@ class ConsensusFlowTest extends TestCase
         $this->assertStringContainsString('Maximizar o resultado total do hotel', $final->context);
 
         // e o desempate vem depois dela, fora da contagem
-        $bonus = Question::where('is_bonus', true)->firstOrFail();
+        $bonus = Question::where('is_bonus', true)->where('active', true)->orderBy('round')->firstOrFail();
         $this->assertSame(2, $bonus->phase);
-        $this->assertSame(7, $bonus->round);
+        $this->assertSame($this->activeQuestions(2)->count() + 2, $bonus->round);
     }
 
     public function test_the_event_walks_five_rounds_then_phase_two(): void
@@ -1617,8 +1692,9 @@ class ConsensusFlowTest extends TestCase
         $this->postJson('/api/admin/previous', [], $this->master)
             ->assertOk()
             ->assertJsonPath('event.round', 1)
-            ->assertJsonPath('event.round_status', 'revealed')
-            ->assertJsonPath('results.total_votes', 1);
+            // volta parada: a revelação por rodada saiu do roteiro, e parada é
+            // o único estado do qual dá para reabrir a votação
+            ->assertJsonPath('event.round_status', 'idle');
     }
 
     /** Pular uma rodada que nunca foi aberta é o mesmo caminho, sem voto. */
@@ -1663,14 +1739,13 @@ class ConsensusFlowTest extends TestCase
             ->assertOk()
             ->assertJsonPath('event.round', 2);
 
-        // volta para a 1 — e ela volta revelada, porque já foi jogada: rever a
-        // divergência da sala é a razão de voltar
+        // volta para a 1, parada e pronta para reabrir — sem revelação por
+        // rodada não há estado "revelado" a restaurar
         $this->postJson('/api/admin/previous', [], $this->master)
             ->assertOk()
             ->assertJsonPath('event.round', 1)
             ->assertJsonPath('event.phase', 1)
-            ->assertJsonPath('event.round_status', 'revealed')
-            ->assertJsonPath('results.total_votes', 1);
+            ->assertJsonPath('event.round_status', 'idle');
 
         // nenhum voto foi apagado no caminho
         $this->assertDatabaseCount('participant_votes', 1);
@@ -1734,7 +1809,7 @@ class ConsensusFlowTest extends TestCase
         $this->postJson('/api/admin/previous', [], $this->master)
             ->assertOk()
             ->assertJsonPath('event.phase', 2)
-            ->assertJsonPath('event.round', 6)
+            ->assertJsonPath('event.round', $this->finalRoundNumber())
             ->assertJsonPath('question.is_bonus', false)
             ->assertJsonPath('question.manual_scoring', true);
     }

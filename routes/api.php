@@ -53,6 +53,9 @@ Route::prefix('admin')->middleware('master')->group(function () {
     Route::post('/missions/assign', [AdminController::class, 'assignMissions']);
     Route::post('/missions/reveal', [AdminController::class, 'revealMissions']);
     Route::post('/missions/hide', [AdminController::class, 'hideMissions']);
+    // o fecho da Fase 1: cada pessoa recebe o próprio total, sem gabarito
+    Route::post('/phase-one/reveal', [AdminController::class, 'revealPhaseOne']);
+    Route::post('/phase-one/hide', [AdminController::class, 'hidePhaseOne']);
     Route::post('/answers/reveal', [AdminController::class, 'revealAnswers']);
     Route::post('/answers/hide', [AdminController::class, 'hideAnswers']);
     Route::post('/next-phase', [AdminController::class, 'nextPhase']);

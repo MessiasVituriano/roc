@@ -29,6 +29,12 @@ const selected = ref(null)
 const editing = ref(false)
 const dirtyLayout = ref(new Map())
 const layer = ref('tables')
+const LAYERS = [
+    { key: 'tables', label: 'Mesas' },
+    { key: 'missions', label: 'Missões' },
+    { key: 'people', label: 'Individual' },
+    { key: 'votes', label: 'Votos da rodada' },
+]
 
 const { data: state, error: stateError, online, refresh, start } = usePolling(
     () => api.get('/admin/overview'),
@@ -86,6 +92,79 @@ const allPeople = computed(() => {
             .some((field) => String(field ?? '').toLowerCase().includes(term)))
 })
 const needsTieBreak = computed(() => state.value?.needs_tie_break ?? false)
+// as mesas ainda empatadas, com as pessoas de cada uma — o 5º critério
+const tieBreak = computed(() => state.value?.tie_break ?? [])
+
+// a Fase 1 fechada devolve a cada pessoa o próprio total, e só ele
+const phaseOneRevealed = computed(() => event.value?.phase_one_revealed ?? false)
+
+// --- seleção de perguntas -----------------------------------------------
+//
+// O evento carrega mais conteúdo do que joga: dois conjuntos de cenários e
+// dois pares de desempate. Aqui o facilitador escolhe o que entra.
+//
+// A unidade é o **cenário**, não a pergunta: o mesmo cenário existe na Fase 1 e
+// na Fase 2, e o comparativo do fecho compara a mesma pergunta dos dois lados.
+// Ligar um lado sem o outro quebraria isso sem avisar.
+const catalogOpen = ref(false)
+const catalog = ref(null)
+const pickedScenarios = ref([])
+const pickedTieBreaks = ref([])
+const catalogError = ref('')
+
+const catalogGroups = computed(() => {
+    const rows = catalog.value?.scenarios ?? []
+
+    return Object.entries(catalog.value?.sources ?? {})
+        .map(([key, label]) => ({ key, label, rows: rows.filter((r) => r.source === key) }))
+        .filter((group) => group.rows.length)
+})
+
+async function openCatalog() {
+    catalogOpen.value = true
+    catalogError.value = ''
+
+    try {
+        catalog.value = await api.get('/admin/question-catalog')
+        pickedScenarios.value = catalog.value.scenarios.filter((s) => s.active).map((s) => s.scenario_key)
+        pickedTieBreaks.value = catalog.value.tie_breaks.filter((b) => b.active).map((b) => b.id)
+    } catch (e) {
+        catalogError.value = e.message
+    }
+}
+
+function toggle(list, value) {
+    const i = list.value.indexOf(value)
+    if (i < 0) list.value = [...list.value, value]
+    else list.value = list.value.filter((v) => v !== value)
+}
+
+async function saveCatalog() {
+    busy.value = 'catalog'
+    catalogError.value = ''
+
+    try {
+        state.value = await api.post('/admin/question-catalog', {
+            scenarios: pickedScenarios.value,
+            tie_breaks: pickedTieBreaks.value,
+        })
+        catalogOpen.value = false
+    } catch (e) {
+        catalogError.value = e.payload?.errors
+            ? Object.values(e.payload.errors).flat()[0]
+            : e.message
+    } finally {
+        busy.value = ''
+    }
+}
+
+// a lista de contatos: sai por download direto, com o token na URL porque o
+// navegador não manda cabeçalho num clique de link
+function contactsPdf() {
+    // o middleware aceita `master_token` na query: um clique de link não manda
+    // cabeçalho, e o download precisa sair pelo navegador
+    window.open(`/api/admin/contacts.pdf?master_token=${encodeURIComponent(masterToken.get() ?? '')}`, '_blank')
+}
 
 const individual = computed(() => event.value?.phase_mode === 'individual')
 const revealed = computed(() => event.value?.round_status === 'revealed')
@@ -144,20 +223,17 @@ const canGoBack = computed(
 // para seguir com a votação fechada quando a conversa já resolveu a rodada. A
 // trava é a mesma do voltar — votação aberta não é atropelada por um clique.
 const canGoNext = computed(() => !isDraft.value && !isFinished.value && !votingOpen.value)
-// nada revelado no telão é o caso em que o clique pula a revelação
-const nextSkipsReveal = computed(() => canGoNext.value && !revealed.value)
 
 // o passo do roteiro em que estamos — ilumina o stepper e o botão recomendado
 const STEPS = [
     { key: 'open', label: 'Abrir' },
     { key: 'voting', label: 'Votação' },
-    { key: 'reveal', label: 'Revelar' },
     { key: 'next', label: 'Próxima' },
 ]
 const currentStep = computed(() => {
     if (isDraft.value) return 'open'
-    if (voting.value) return 'reveal'
-    if (revealed.value) return 'next'
+    // tempo esgotado ou encerrado à mão: o passo agora é seguir
+    if (voting.value) return votingOpen.value ? 'voting' : 'next'
     return 'voting'
 })
 const stepIndex = computed(() => STEPS.findIndex((s) => s.key === currentStep.value))
@@ -166,8 +242,7 @@ const stepIndex = computed(() => STEPS.findIndex((s) => s.key === currentStep.va
 const stageLabel = computed(() => {
     if (isDraft.value) return ['Evento não aberto', 'bg-slate-600']
     if (isFinished.value) return ['Evento encerrado', 'bg-rose-600']
-    if (revealed.value) return ['Revelado no telão', 'bg-emerald-500']
-    if (votingClosed.value) return ['Votação encerrada — revele', 'bg-amber-500']
+    if (votingClosed.value) return ['Votação encerrada — siga', 'bg-amber-500']
     if (voting.value) return ['Votação aberta', 'bg-sky-500 animate-pulse']
     return ['Pronto para abrir votação', 'bg-slate-600']
 })
@@ -391,7 +466,13 @@ async function saveLayout() {
             </div>
         </header>
 
-        <div class="flex-1 grid grid-cols-[minmax(0,22rem)_1fr_minmax(0,22rem)] gap-4 p-4 min-h-0">
+        <!--
+            Três colunas com pesos diferentes: controle à esquerda, a pergunta e
+            o mapa no meio (o mapa compacto — ele diz quem está online, não
+            conduz o evento) e a Central de placares à direita, larga o
+            suficiente para as tabelas serem lidas em vez de decifradas.
+        -->
+        <div class="flex-1 grid grid-cols-[minmax(0,21rem)_minmax(0,1fr)_minmax(0,30rem)] gap-4 p-4 min-h-0">
             <!-- coluna 1: controle da rodada -->
             <aside class="flex flex-col gap-3 overflow-y-auto">
                 <div class="rounded-3xl bg-slate-900/70 ring-1 ring-white/10 p-5 space-y-3">
@@ -473,24 +554,20 @@ async function saveLayout() {
                             ▶ Abrir votação · rodada {{ event?.round }}
                         </button>
 
-                        <!-- durante a votação: encerrar e revelar; abrir fica travado -->
-                        <div class="grid grid-cols-2 gap-2">
-                            <button
-                                class="rounded-2xl px-3 py-3 font-bold text-white bg-gradient-to-r from-amber-500 to-orange-500 hover:brightness-110 active:scale-95 transition disabled:opacity-30 disabled:grayscale disabled:cursor-not-allowed"
-                                :disabled="!votingOpen || busy === 'close'"
-                                @click="action('close', '/admin/close')"
-                            >
-                                ⏹ Encerrar
-                            </button>
-                            <button
-                                class="rounded-2xl px-3 py-3 font-black text-white bg-gradient-to-r from-emerald-500 to-teal-500 hover:brightness-110 active:scale-95 transition disabled:opacity-30 disabled:grayscale disabled:cursor-not-allowed shadow-emerald-500/20"
-                                :class="voting && busy !== 'reveal' ? 'ring-2 ring-white/40 shadow-lg ' + (votingClosed ? 'animate-attn' : '') : ''"
-                                :disabled="!voting || busy === 'reveal'"
-                                @click="action('reveal', '/admin/reveal')"
-                            >
-                                📊 Revelar
-                            </button>
-                        </div>
+                        <!--
+                            Três botões e nada mais: abrir, encerrar, seguir. A
+                            revelação por rodada saiu do roteiro — o telão não
+                            mostra distribuição no meio do caminho, e tudo o que
+                            há para revelar sai de uma vez no fecho.
+                        -->
+                        <button
+                            class="w-full rounded-2xl px-3 py-3 font-bold text-white bg-gradient-to-r from-amber-500 to-orange-500 hover:brightness-110 active:scale-95 transition disabled:opacity-30 disabled:grayscale disabled:cursor-not-allowed"
+                            :class="votingClosed ? '' : (votingOpen ? 'ring-2 ring-white/40 shadow-lg' : '')"
+                            :disabled="!votingOpen || busy === 'close'"
+                            @click="action('close', '/admin/close')"
+                        >
+                            ⏹ Encerrar votação
+                        </button>
 
                         <!--
                             Seguir para a próxima rodada. Depois de revelar é o
@@ -501,14 +578,12 @@ async function saveLayout() {
                         -->
                         <button
                             class="w-full rounded-2xl px-4 py-4 font-black text-white text-lg bg-gradient-to-r from-fuchsia-500 to-purple-500 hover:brightness-110 active:scale-95 transition disabled:opacity-30 disabled:grayscale disabled:cursor-not-allowed"
-                            :class="revealed && busy !== 'next' ? 'ring-2 ring-white/40 shadow-lg animate-attn' : ''"
+                            :class="canGoNext && busy !== 'next' ? 'ring-2 ring-white/40 shadow-lg ' + (votingClosed ? 'animate-attn' : '') : ''"
                             :disabled="!canGoNext || busy === 'next'"
-                            :title="nextSkipsReveal
-                                ? 'Segue sem revelar esta rodada no telão — nenhum voto é apagado, e ⏮ traz ela de volta'
-                                : 'Carrega a rodada seguinte'"
+                            title="Carrega a rodada seguinte"
                             @click="action('next', '/admin/next')"
                         >
-                            ⏭ Próxima rodada{{ nextSkipsReveal ? ' (sem revelar)' : '' }}
+                            ⏭ Próxima rodada
                         </button>
 
                         <!--
@@ -528,15 +603,6 @@ async function saveLayout() {
                             ⏮ {{ backLeavesPhase ? `Voltar para a Fase ${(event?.phase ?? 2) - 1}` : 'Rodada anterior' }}
                         </button>
 
-                        <!-- corrigir uma revelação precoce -->
-                        <button
-                            v-if="revealed"
-                            class="w-full rounded-xl px-4 py-2 text-xs font-semibold text-slate-400 hover:text-sky-300 transition"
-                            @click="action('unreveal', '/admin/unreveal')"
-                        >
-                            ↩ Reabrir votação (desfazer revelação)
-                        </button>
-
                         <!--
                             Rodar esta rodada de novo, do zero. Fica aqui, com
                             os outros controles de rodada, porque é onde o
@@ -554,8 +620,39 @@ async function saveLayout() {
                 </div>
 
                 <!-- a virada de fase -->
+                <!--
+                    O acervo. O evento tem mais perguntas cadastradas do que
+                    joga — dois conjuntos de cenários e dois pares de desempate
+                    —, e quem decide o roteiro é o facilitador, sem deploy.
+                -->
+                <button
+                    class="w-full rounded-2xl px-4 py-3 text-sm font-bold text-slate-200 bg-slate-800 ring-1 ring-white/10 hover:bg-slate-700 transition"
+                    @click="openCatalog"
+                >
+                    📋 Escolher as perguntas do evento
+                </button>
+
                 <div class="rounded-3xl bg-amber-500/10 ring-2 ring-amber-500/40 p-5 space-y-2">
                     <p class="text-[10px] uppercase tracking-widest text-amber-300 font-black">A virada de fase</p>
+                    <!--
+                        Encerrar a Fase 1. Sem revelação por rodada, a sala
+                        atravessa cinco decisões sem notícia nenhuma do próprio
+                        resultado — este clique devolve a cada um o **total** que
+                        fez sozinho, e nada além dele. O gabarito e o valor de
+                        cada pergunta continuam trancados até o fecho.
+                    -->
+                    <button
+                        class="w-full rounded-2xl px-4 py-3 font-black text-white transition hover:brightness-110 active:scale-95"
+                        :class="phaseOneRevealed
+                            ? 'bg-slate-700'
+                            : 'bg-gradient-to-r from-sky-500 to-cyan-500'"
+                        @click="action('phase-one', phaseOneRevealed ? '/admin/phase-one/hide' : '/admin/phase-one/reveal')"
+                    >
+                        {{ phaseOneRevealed ? '🙈 Ocultar a pontuação da Fase 1' : '🔢 Encerrar Fase 1 · mostrar pontuação de cada um' }}
+                    </button>
+                    <p v-if="!phaseOneRevealed" class="text-[11px] text-amber-200/70 leading-snug">
+                        Cada pessoa vê só o próprio total. Sem gabarito e sem quanto valeu cada pergunta.
+                    </p>
                     <button
                         class="w-full rounded-2xl px-4 py-3 font-black text-white bg-gradient-to-r from-amber-500 to-yellow-500 hover:brightness-110 active:scale-95 transition"
                         @click="action('missions', event?.missions_revealed ? '/admin/missions/hide' : '/admin/missions/reveal')"
@@ -599,18 +696,94 @@ async function saveLayout() {
                     </p>
                 </div>
 
-                <div class="rounded-3xl bg-slate-900/70 ring-1 ring-white/10 p-5 space-y-2">
-                    <button
-                        class="w-full rounded-2xl px-4 py-2.5 text-sm font-bold text-white bg-slate-700 hover:bg-slate-600 transition"
-                        @click="action('bonus', '/admin/bonus-round')"
+                <!--
+                    A última alternativa do critério de vitória. Quando as duas
+                    perguntas de desempate não resolvem, não há sexta pergunta:
+                    decide a pontuação individual das mesas empatadas. Este
+                    cartão põe na mão do facilitador exatamente quem compõe cada
+                    uma e quanto cada um fez sozinho — sem isso a decisão final
+                    vira "escolhe uma" na frente de 150 pessoas.
+                -->
+                <div v-if="tieBreak.length" class="rounded-3xl bg-rose-500/10 ring-2 ring-rose-400/50 p-5 space-y-3">
+                    <div>
+                        <p class="text-[10px] uppercase tracking-widest text-rose-300 font-black">
+                            Decisão final · empate na liderança
+                        </p>
+                        <p class="text-[11px] text-slate-300 mt-0.5">
+                            Rode os dois desempates. Se o empate sobreviver, vence a mesa com maior
+                            pontuação individual.
+                        </p>
+                    </div>
+
+                    <div
+                        v-for="(mesa, i) in tieBreak"
+                        :key="mesa.table_id"
+                        class="rounded-2xl p-3 ring-1"
+                        :class="i === 0 ? 'bg-emerald-500/10 ring-emerald-400/40' : 'bg-slate-900/60 ring-white/10'"
                     >
-                        🎲 Carregar rodada de desempate
-                    </button>
+                        <div class="flex items-baseline gap-2">
+                            <span>{{ mesa.icon }}</span>
+                            <span class="font-black text-white">{{ mesa.name }}</span>
+                            <span class="ml-auto text-xs tabular-nums text-slate-400">
+                                total {{ mesa.total_points }}
+                            </span>
+                        </div>
+                        <p class="text-[11px] text-slate-400 mt-0.5">
+                            Individual da mesa: <b class="text-white">{{ mesa.phase_one_points }}</b>
+                            · melhor pessoa: <b class="text-white">{{ mesa.best_individual }}</b>
+                        </p>
+                        <div class="mt-2 space-y-0.5">
+                            <div
+                                v-for="(person, j) in mesa.members"
+                                :key="person.participant_id"
+                                class="flex items-center gap-2 text-xs"
+                                :class="person.blocked ? 'opacity-40 line-through' : ''"
+                            >
+                                <span class="w-4 text-right tabular-nums text-slate-600">{{ j + 1 }}</span>
+                                <PixelAvatar :seed="person.avatar_seed" :gender="person.gender" :size="18" />
+                                <span class="flex-1 min-w-0 truncate text-slate-200">{{ person.name }}</span>
+                                <span class="tabular-nums font-bold text-white">{{ person.points }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rounded-3xl bg-slate-900/70 ring-1 ring-white/10 p-5 space-y-2">
+                    <!--
+                        Duas perguntas de desempate: uma só pode empatar de
+                        novo, e descobrir isso com a sala olhando é tarde. Se as
+                        duas não resolverem, o critério seguinte não precisa de
+                        pergunta — é a pontuação individual das mesas, e ela
+                        aparece no cartão de decisão final abaixo.
+                    -->
+                    <div class="grid grid-cols-2 gap-2">
+                        <button
+                            v-for="which in [1, 2]"
+                            :key="which"
+                            class="rounded-2xl px-3 py-2.5 text-sm font-bold text-white bg-slate-700 hover:bg-slate-600 transition"
+                            :class="needsTieBreak ? 'ring-1 ring-rose-400/50' : ''"
+                            @click="action(`bonus-${which}`, '/admin/bonus-round', { which })"
+                        >
+                            🎲 Desempate {{ which }}
+                        </button>
+                    </div>
                     <button
                         class="w-full rounded-2xl px-4 py-2.5 text-sm font-bold text-white bg-rose-600 hover:brightness-110 transition"
                         @click="action('end', '/admin/end')"
                     >
                         🏁 Finalizar evento
+                    </button>
+                    <!--
+                        A lista de contatos, o motivo pelo qual o cadastro pede
+                        e-mail ou telefone. Só depois de encerrar: antes disso a
+                        sala ainda está entrando.
+                    -->
+                    <button
+                        v-if="isFinished"
+                        class="w-full rounded-2xl px-4 py-2.5 text-sm font-bold text-slate-100 bg-slate-700 hover:bg-slate-600 transition"
+                        @click="contactsPdf"
+                    >
+                        📄 Baixar contatos (PDF)
                     </button>
                     <div class="pt-2 mt-1 border-t border-white/10">
                         <button
@@ -824,15 +997,11 @@ async function saveLayout() {
                 </Transition>
             </section>
 
-            <!-- coluna 3: as três camadas de placar -->
+            <!-- coluna 3: a Central — placares e o voto da rodada -->
             <aside class="flex flex-col gap-3 min-h-0">
                 <div class="flex gap-1 rounded-2xl bg-slate-900/70 ring-1 ring-white/10 p-1">
                     <button
-                        v-for="tab in [
-                            { key: 'tables', label: 'Mesas' },
-                            { key: 'missions', label: 'Missões' },
-                            { key: 'people', label: 'Individual' },
-                        ]"
+                        v-for="tab in LAYERS"
                         :key="tab.key"
                         class="flex-1 rounded-xl px-2 py-2 text-xs font-bold transition"
                         :class="layer === tab.key ? 'bg-indigo-500 text-white' : 'text-slate-400 hover:text-white'"
@@ -913,7 +1082,7 @@ async function saveLayout() {
                         individual — a mesa decide por todos —, então "F2" é o
                         que a mesa dela fez, repetido em cada membro.
                     -->
-                    <div v-else class="space-y-2">
+                    <div v-else-if="layer === 'people'" class="space-y-2">
                         <div class="flex items-center gap-1 rounded-xl bg-slate-950/60 p-1">
                             <button
                                 v-for="tab in PERSON_SORTS" :key="tab.key"
@@ -1023,6 +1192,68 @@ async function saveLayout() {
                             </div>
                         </div>
                     </div>
+
+                    <!--
+                        VOTOS DA RODADA: o que o mapa mostra em cartinhas, aqui
+                        em números. Quem já respondeu, quem falta, e — na Fase 2
+                        — qual mesa ainda não registrou. É a leitura objetiva
+                        que o facilitador precisa para decidir se encerra.
+                    -->
+                    <div v-else-if="layer === 'votes'" class="space-y-2">
+                        <div class="flex items-baseline gap-2">
+                            <p class="text-[10px] uppercase tracking-widest text-slate-500">
+                                {{ individual ? 'Votos por mesa' : 'Decisão de cada mesa' }}
+                            </p>
+                            <p class="ml-auto text-xs tabular-nums text-slate-400">
+                                {{ progress.answered }}/{{ progress.total }} · {{ progress.percent }}%
+                            </p>
+                        </div>
+
+                        <table class="w-full text-sm">
+                            <thead class="text-[10px] uppercase tracking-widest text-slate-500">
+                                <tr>
+                                    <th class="text-left pb-2">Mesa</th>
+                                    <th class="text-right pb-2">Pessoas</th>
+                                    <th class="text-right pb-2">Online</th>
+                                    <th class="text-right pb-2">Respondeu</th>
+                                    <th class="text-right pb-2">Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr
+                                    v-for="row in tables" :key="row.id"
+                                    class="border-t border-white/5"
+                                    :class="row.participants_count === 0 ? 'opacity-40' : ''"
+                                >
+                                    <td class="py-1.5 text-white font-bold truncate">
+                                        {{ row.icon }} {{ row.name }}
+                                        <span v-if="!individual && row.representative_id" class="text-amber-300">👑</span>
+                                    </td>
+                                    <td class="text-right tabular-nums text-slate-400">{{ row.participants_count }}</td>
+                                    <td class="text-right tabular-nums"
+                                        :class="row.online_count ? 'text-emerald-400' : 'text-slate-600'">
+                                        {{ row.online_count }}
+                                    </td>
+                                    <td class="text-right tabular-nums text-slate-200">
+                                        {{ row.answered }}/{{ row.expected }}
+                                    </td>
+                                    <td class="text-right">
+                                        <span
+                                            class="text-[10px] font-bold px-2 py-0.5 rounded-lg"
+                                            :class="{
+                                                'bg-emerald-500/20 text-emerald-300': row.state === 'done',
+                                                'bg-sky-500/20 text-sky-300': row.state === 'discussing',
+                                                'bg-amber-500/20 text-amber-300': row.state === 'warning',
+                                                'bg-slate-700 text-slate-400': row.state === 'idle',
+                                            }"
+                                        >
+                                            {{ { done: 'completo', discussing: 'respondendo', warning: 'no fim', idle: 'parado' }[row.state] }}
+                                        </span>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
                 <!-- resultado da rodada revelada, para o facilitador narrar -->
@@ -1059,6 +1290,104 @@ async function saveLayout() {
                     </div>
                 </div>
             </aside>
+        </div>
+
+        <!--
+            ESCOLHER AS PERGUNTAS. Em tela cheia porque a decisão é de leitura:
+            o facilitador compara enunciados antes de montar o roteiro.
+        -->
+        <div
+            v-if="catalogOpen"
+            class="fixed inset-0 z-40 bg-slate-950/90 backdrop-blur-sm p-6 flex"
+            @click.self="catalogOpen = false"
+        >
+            <div class="m-auto w-full max-w-4xl max-h-full rounded-3xl bg-slate-900 ring-1 ring-white/10 p-5 flex flex-col gap-4 min-h-0">
+                <div class="flex items-center gap-3 shrink-0">
+                    <h2 class="text-xl font-black text-white">Perguntas do evento</h2>
+                    <span class="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-200 text-xs font-bold tabular-nums">
+                        {{ pickedScenarios.length }} cenários · {{ pickedTieBreaks.length }} desempates
+                    </span>
+                    <button class="ml-auto text-slate-500 hover:text-white text-xl leading-none" @click="catalogOpen = false">✕</button>
+                </div>
+
+                <p class="text-[11px] text-slate-500 leading-snug shrink-0">
+                    Cada cenário é jogado <strong class="text-slate-400">duas vezes</strong>: sozinho na Fase 1 e
+                    em mesa na Fase 2. Por isso liga e desliga inteiro — é essa simetria que faz o comparativo do
+                    fecho ser uma medida. Perguntas já jogadas mantêm os votos ao serem desligadas.
+                </p>
+
+                <p v-if="catalogError" class="rounded-xl bg-rose-500/15 text-rose-300 text-sm px-4 py-2 shrink-0">
+                    {{ catalogError }}
+                </p>
+
+                <div class="flex-1 min-h-0 overflow-y-auto -mx-1 px-1 space-y-5">
+                    <div v-for="group in catalogGroups" :key="group.key" class="space-y-1.5">
+                        <p class="text-[10px] uppercase tracking-widest text-indigo-300 font-black">{{ group.label }}</p>
+                        <button
+                            v-for="row in group.rows"
+                            :key="row.scenario_key"
+                            class="w-full text-left rounded-2xl px-4 py-3 ring-1 transition flex gap-3"
+                            :class="pickedScenarios.includes(row.scenario_key)
+                                ? 'bg-emerald-500/10 ring-emerald-400/40'
+                                : 'bg-slate-800/40 ring-white/5 hover:ring-white/20'"
+                            @click="toggle(pickedScenarios, row.scenario_key)"
+                        >
+                            <span class="text-lg leading-none mt-0.5">
+                                {{ pickedScenarios.includes(row.scenario_key) ? '☑' : '☐' }}
+                            </span>
+                            <span class="min-w-0">
+                                <span class="block text-[10px] font-black uppercase tracking-widest text-amber-300">
+                                    {{ row.label }}
+                                </span>
+                                <span class="block text-sm font-bold text-white">{{ row.title }}</span>
+                                <span class="block text-[11px] text-slate-500 line-clamp-2">{{ row.context }}</span>
+                            </span>
+                        </button>
+                    </div>
+
+                    <div class="space-y-1.5">
+                        <p class="text-[10px] uppercase tracking-widest text-rose-300 font-black">
+                            Desempates · usados só se o empate sobreviver aos critérios
+                        </p>
+                        <button
+                            v-for="row in (catalog?.tie_breaks ?? [])"
+                            :key="row.id"
+                            class="w-full text-left rounded-2xl px-4 py-3 ring-1 transition flex gap-3"
+                            :class="pickedTieBreaks.includes(row.id)
+                                ? 'bg-rose-500/10 ring-rose-400/40'
+                                : 'bg-slate-800/40 ring-white/5 hover:ring-white/20'"
+                            @click="toggle(pickedTieBreaks, row.id)"
+                        >
+                            <span class="text-lg leading-none mt-0.5">
+                                {{ pickedTieBreaks.includes(row.id) ? '☑' : '☐' }}
+                            </span>
+                            <span class="min-w-0">
+                                <span class="block text-[10px] font-black uppercase tracking-widest text-rose-300">
+                                    {{ row.label }} · {{ catalog?.sources?.[row.source] }}
+                                </span>
+                                <span class="block text-sm font-bold text-white">{{ row.title }}</span>
+                                <span class="block text-[11px] text-slate-500 line-clamp-2">{{ row.context }}</span>
+                            </span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2 shrink-0">
+                    <button
+                        class="rounded-2xl px-4 py-3 font-bold text-slate-300 bg-white/5 hover:bg-white/10 transition"
+                        @click="catalogOpen = false"
+                    >
+                        Cancelar
+                    </button>
+                    <button
+                        class="rounded-2xl px-4 py-3 font-black text-white bg-gradient-to-r from-emerald-500 to-teal-400 hover:brightness-110 active:scale-95 transition disabled:opacity-40"
+                        :disabled="!pickedScenarios.length || busy === 'catalog'"
+                        @click="saveCatalog"
+                    >
+                        {{ busy === 'catalog' ? 'Salvando…' : 'Salvar seleção' }}
+                    </button>
+                </div>
+            </div>
         </div>
 
         <!--
