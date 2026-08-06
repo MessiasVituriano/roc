@@ -22,24 +22,30 @@ use Illuminate\Database\Seeder;
 class LiveConsensusSeeder extends Seeder
 {
     /**
-     * Tempo de cada uma das cinco rodadas da Fase 1.
+     * Tempo de cada rodada da Fase 1.
      *
-     * Um minuto: o suficiente para ler o cenário do hotel sem pressa, pesar as
-     * quatro alternativas e ainda trocar de ideia — a escolha pode ser mudada
-     * enquanto o cronômetro corre. O facilitador corta antes com ⏹ Encerrar
-     * quando a sala já fechou, e estica com +10s / +30s quando não fechou.
+     * Noventa segundos, o número que o documento da dinâmica especifica: dá
+     * para ler o cenário sem pressa, pesar as quatro alternativas e ainda
+     * trocar de ideia — a escolha pode ser mudada enquanto o cronômetro corre.
+     * O facilitador corta antes com ⏹ Encerrar quando a sala já fechou, e
+     * estica com +10s / +30s quando não fechou.
      */
-    public const PHASE_ONE_DURATION = 60;
+    public const PHASE_ONE_DURATION = 90;
 
     /**
-     * Tempo das rodadas da Fase 2 — a rodada final e o desempate.
+     * Tempo das rodadas da Fase 2 — os cenários de mesa, a rodada final e os
+     * desempates.
      *
-     * O dobro da Fase 1 porque aqui a mesa precisa conversar antes de decidir:
-     * não é uma escolha individual, é um consenso a construir entre quatro
-     * missões que se contradizem. Vale para as duas perguntas da fase; o
-     * facilitador ajusta ao vivo pelos mesmos controles.
+     * Igual ao da Fase 1, e não o dobro: o relógio é da **pergunta**, não do
+     * decisor. Decidir em mesa custa conversa, mas essa conversa começa antes
+     * de a rodada abrir — desde que a candidatura ao posto de representante
+     * passou a acontecer com a rodada parada, a mesa chega ao cronômetro já
+     * organizada.
+     *
+     * As duas constantes seguem separadas porque o relógio por fase já foi
+     * ajustado três vezes; iguais hoje não quer dizer iguais sempre.
      */
-    public const PHASE_TWO_DURATION = 120;
+    public const PHASE_TWO_DURATION = 90;
 
     protected array $missions = [
         ['diaria_media', 'Diária Média', 'Seu diretor financeiro pediu que você preservasse a diária média.', '💰', '#c9922e'],

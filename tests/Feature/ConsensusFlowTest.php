@@ -1908,7 +1908,7 @@ class ConsensusFlowTest extends TestCase
             ->assertOk()
             ->assertJsonPath('event.round_status', 'voting')
             ->assertJsonPath('event.round', 1)
-            ->assertJsonPath('timer.duration', 60);
+            ->assertJsonPath('timer.duration', 90);
 
         $this->postJson('/api/vote', [
             'option_id' => $this->optionWorth($this->question(1, 1), 80),
@@ -2215,31 +2215,27 @@ class ConsensusFlowTest extends TestCase
     }
 
     /**
-     * Um relógio por fase: 60s para decidir sozinho, 120s para a mesa conversar
-     * antes de decidir. O do evento parado acompanha a Fase 1, que é onde ele
-     * aparece — antes do primeiro "abrir votação".
+     * Noventa segundos por rodada, nas duas fases — o número que o documento da
+     * dinâmica especifica. O relógio é da **pergunta**, não do decisor: a
+     * conversa que a mesa precisa ter acontece antes de a rodada abrir, no
+     * estado de candidatura ao posto de representante.
      */
-    public function test_each_phase_has_its_own_round_clock(): void
+    public function test_every_round_runs_for_ninety_seconds(): void
     {
-        foreach (Question::where('phase', 1)->get() as $question) {
-            $this->assertSame(60, $question->duration);
-        }
-
-        // as duas da Fase 2 — a rodada final e o desempate — no mesmo relógio
-        foreach (Question::where('phase', 2)->get() as $question) {
-            $this->assertSame(120, $question->duration);
+        foreach (Question::all() as $question) {
+            $this->assertSame(90, $question->duration, "rodada {$question->phase}/{$question->round}");
         }
 
         $this->postJson('/api/admin/open', [], $this->master);
         $this->postJson('/api/admin/start', [], $this->master)
             ->assertOk()
-            ->assertJsonPath('timer.duration', 60);
+            ->assertJsonPath('timer.duration', 90);
 
         $this->postJson('/api/admin/next-phase', [], $this->master);
         $this->postJson('/api/admin/start', [], $this->master)
             ->assertOk()
             ->assertJsonPath('event.phase', 2)
-            ->assertJsonPath('timer.duration', 120);
+            ->assertJsonPath('timer.duration', 90);
     }
 
     public function test_layout_positions_can_be_saved_in_bulk(): void
