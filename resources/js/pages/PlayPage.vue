@@ -98,6 +98,11 @@ const screen = computed(() => {
         // quem já votou continua aqui: é o que permite trocar de ideia
         return 'voting'
     }
+    // Rodada parada na Fase 2 e a mesa sem representante: a candidatura abre
+    // aqui, não junto com o cronômetro. Escolher quem registra é uma conversa
+    // da mesa — fazê-la disputar o botão com os segundos correndo tirava da
+    // rodada o tempo que era para decidir.
+    if (needsRepresentative.value && canAnswer.value) return 'claim'
     return 'waiting'
 })
 
@@ -440,6 +445,10 @@ async function switchTo(id) {
                         <h2 class="text-2xl font-black text-white">Quem registra pela mesa?</h2>
                         <p class="text-slate-400">
                             Agora a decisão é conjunta. Combinem e uma pessoa registra a resposta da mesa.
+                        </p>
+                        <!-- antes de a rodada abrir, dá para combinar sem pressa -->
+                        <p v-if="event?.round_status !== 'voting'" class="text-xs text-slate-500">
+                            A rodada ainda não abriu — decidam com calma quem vai registrar.
                         </p>
                         <p v-if="voteError" class="rounded-xl bg-rose-500/15 text-rose-300 text-sm px-4 py-2">
                             {{ voteError }}
