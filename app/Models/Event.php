@@ -40,7 +40,7 @@ class Event extends Model
             'phase' => 'integer',
             'current_round' => 'integer',
             'round_duration' => 'integer',
-            'missions_revealed' => 'boolean',
+            'responses_revealed' => 'boolean',
             'phase_one_revealed' => 'boolean',
             'answers_revealed' => 'boolean',
             'round_started_at' => 'datetime',

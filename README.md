@@ -6,8 +6,11 @@ Especificação de conteúdo e regras: [`docs/dinamica-roc.md`](docs/dinamica-ro
 - **Fase 1 — individual.** 5 rodadas sincronizadas de 90s.
   Cada pessoa recebe uma **missão sorteada** e decide com ela, e pode trocar a
   escolha enquanto o cronômetro corre.
-- **Virada de fase.** O placar **por grupo de missão** vai ao telão: mesma
-  régua, missões diferentes, decisões diferentes.
+- **Virada de fase.** O telão mostra **como a sala respondeu**: cada
+  alternativa com o percentual que a escolheu, sem gabarito e sem pontos. Ver
+  que a sala se dividiu é o que dá sentido a decidir de novo, em mesa.
+  O placar **por grupo de missão** continua no painel, para o facilitador
+  narrar o viés.
 - **Fase 2 — em mesa.** As **mesmas cinco perguntas**, agora decididas por
   consenso pela mesa (90s cada), com o **representante** registrando por
   todos. Fecha com a **rodada final**: uma 6ª pergunta **sem alternativas** —
@@ -181,7 +184,7 @@ Numa VPS de 2 GB, baixe para 16: ainda é bem mais que o pico real.
 | 4 | **📊 REVELAR no telão** | a distribuição dos votos vai ao telão (sem gabarito) |
 | 5 | **⏭ Próxima rodada** | carrega a rodada seguinte — revelar não é pré-requisito |
 | ↩ | **⏮ Rodada anterior** | volta uma rodada (revelada, se já foi jogada); na 1ª rodada da fase, volta a fase |
-| 6 | **🎭 Revelar placar por missão** | a virada de fase |
+| 6 | **🎭 Revelar como a sala respondeu** | a virada de fase: cada alternativa com o % que a escolheu |
 | 7 | **➡ Ir para a Fase 2** | carrega a 1ª das cinco rodadas de mesa; da 6ª em diante a pontuação é lançada à mão no painel |
 | 8 | **🔓 Revelar gabarito + comparativo** | **o fecho:** gabarito da Fase 1 e a rodada final no telão |
 | 9 | **🎲 Rodada de desempate** | só se o empate sobreviver aos 3 primeiros critérios |

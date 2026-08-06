@@ -246,10 +246,18 @@ class EventStateService
             ];
         }
 
-        // camada 2 — o viés por missão só vai ao telão na virada de fase, e os
-        // acertos só junto com o gabarito (a virada acontece antes da Fase 2)
-        if ($event->missions_revealed || $forMaster) {
+        // Camada 2 — o viés por missão é leitura do facilitador, para narrar. Ele
+        // saiu do telão: entre as duas fases, o que a sala quer ver é onde ela
+        // mesma se dividiu, não uma média por grupo.
+        if ($forMaster) {
             $payload['mission_ranking'] = $this->scores->missionRanking($event, withAnswerKey: $key);
+        }
+
+        // A divergência da sala, no clique da virada de fase: cada alternativa
+        // com o percentual que a escolheu. Sem gabarito e sem pontos — é a
+        // pergunta "e vocês, o que responderam?", não a resposta certa.
+        if ($event->responses_revealed || $forMaster) {
+            $payload['response_distribution'] = $this->responseDistribution($event);
         }
 
         // o gabarito, enfim: o telão pode mostrar o que a sala passou o evento
@@ -318,7 +326,7 @@ class EventStateService
                 ? Question::MODE_INDIVIDUAL
                 : Question::MODE_CONSENSUS,
             'last_phase' => Event::LAST_PHASE,
-            'missions_revealed' => $event->missions_revealed,
+            'responses_revealed' => $event->responses_revealed,
             'phase_one_revealed' => $event->phase_one_revealed,
             'answers_revealed' => $event->answers_revealed,
             'voting_open' => $event->isAcceptingVotes(),
@@ -440,6 +448,58 @@ class EventStateService
                 ->values()
                 ->all(),
         ];
+    }
+
+    /**
+     * Como a sala respondeu, rodada a rodada.
+     *
+     * As alternativas na **ordem original** e sem pontuação nenhuma: ordenar
+     * por régua poria a melhor sempre no topo, e mostrar pontos seria o
+     * gabarito com outro nome. O que sai daqui é só a divisão da sala.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function responseDistribution(Event $event): array
+    {
+        $questions = $event->questions()
+            ->with(['options' => fn ($q) => $q->orderBy('order')])
+            ->where('phase', 1)
+            ->where('is_bonus', false)
+            ->where('active', true)
+            ->orderBy('round')
+            ->get();
+
+        $counts = ParticipantVote::whereIn('question_id', $questions->pluck('id'))
+            ->selectRaw('question_id, option_id, count(*) as total')
+            ->groupBy('question_id', 'option_id')
+            ->get()
+            ->mapWithKeys(fn ($row) => ["{$row->question_id}:{$row->option_id}" => (int) $row->total]);
+
+        return $questions
+            ->map(function (Question $question) use ($counts) {
+                $options = $question->options->map(fn ($option) => [
+                    'option_id' => $option->id,
+                    'text' => $option->text,
+                    'votes' => $counts["{$question->id}:{$option->id}"] ?? 0,
+                ]);
+
+                $total = $options->sum('votes');
+
+                return [
+                    'round' => $question->round,
+                    'label' => $question->label,
+                    'title' => $question->title,
+                    'total_votes' => $total,
+                    'options' => $options
+                        ->map(fn (array $o) => $o + [
+                            'percent' => $total > 0 ? (int) round($o['votes'] / $total * 100) : 0,
+                        ])
+                        ->values()
+                        ->all(),
+                ];
+            })
+            ->values()
+            ->all();
     }
 
     /**

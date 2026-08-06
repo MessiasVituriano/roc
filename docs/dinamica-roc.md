@@ -77,7 +77,7 @@ justamente o conflito **dentro da mesa** que a rodada final precisa resolver.
 |---|---|---|
 | Abertura e contexto | 1 min | facilitador apresenta o cenário do hotel |
 | Fase 1 — 5 rodadas individuais | 8 min | **90s de votação por rodada** |
-| Virada de fase (revelação por grupo de missão) | 2 min | o viés aparece no placar |
+| Virada de fase (como a sala respondeu) | 2 min | a divisão da sala em cada rodada |
 | Fase 2 — os mesmos 5 cenários, em mesa | 9 min | **90s de consenso por rodada** |
 | Fase 2 — rodada final por mesa | 3 min | **90s de consenso + lançamento da pontuação** |
 | **O comparativo** (gabarito + confronto das fases) | 3 min | a prova numérica do objetivo 2 |

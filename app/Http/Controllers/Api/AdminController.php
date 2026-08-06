@@ -88,15 +88,15 @@ class AdminController extends Controller
         return $this->respond($this->flow->addTime($this->requireEvent(), $data['seconds']));
     }
 
-    /** A virada de fase: placar por grupo de missão no telão. */
-    public function revealMissions(): JsonResponse
+    /** A virada de fase: como a sala respondeu vai ao telão. */
+    public function revealResponses(): JsonResponse
     {
-        return $this->respond($this->flow->revealMissions($this->requireEvent()));
+        return $this->respond($this->flow->revealResponses($this->requireEvent()));
     }
 
-    public function hideMissions(): JsonResponse
+    public function hideResponses(): JsonResponse
     {
-        return $this->respond($this->flow->hideMissions($this->requireEvent()));
+        return $this->respond($this->flow->hideResponses($this->requireEvent()));
     }
 
     /** O fecho: gabarito e comparativo entre as fases vão ao telão. */
