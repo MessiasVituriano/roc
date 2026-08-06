@@ -64,6 +64,27 @@ const peopleRanking = computed(() =>
         .map((row, i) => ({ ...row, rank: i + 1 })),
 )
 const blockedPeople = computed(() => individualRanking.value.filter((row) => row.blocked))
+
+// --- moderação: a lista de pessoas em tela cheia -------------------------
+//
+// O bloqueio vivia em dois cantos apertados: a gaveta que só abre clicando na
+// mesa certa no mapa, e uma coluna de 20px no placar. Os dois pressupõem que o
+// facilitador já sabe *onde* a pessoa está — e o gatilho real é o contrário:
+// ele lê um nome impróprio no telão e precisa achá-lo entre 150.
+//
+// Por isso a busca, e por isso a ordem é alfabética e não por pontos: aqui não
+// se conduz o evento, se procura uma pessoa.
+const peopleOpen = ref(false)
+const peopleSearch = ref('')
+
+const allPeople = computed(() => {
+    const term = peopleSearch.value.trim().toLowerCase()
+
+    return [...individualRanking.value]
+        .sort((a, b) => String(a.name).localeCompare(String(b.name), 'pt-BR'))
+        .filter((row) => !term || [row.name, row.hotel, row.table]
+            .some((field) => String(field ?? '').toLowerCase().includes(term)))
+})
 const needsTieBreak = computed(() => state.value?.needs_tie_break ?? false)
 
 const individual = computed(() => event.value?.phase_mode === 'individual')
@@ -160,6 +181,15 @@ const selectedTable = computed(() => tables.value.find((t) => t.id === selected.
 
 // quantas mesas já fecharam o voto nesta rodada — alimenta o destaque de "completo"
 const doneTables = computed(() => tables.value.filter((t) => t.state === 'done').length)
+
+// A Fase 2 abre com um tempo de candidatura: os celulares já mostram o botão
+// de assumir com a rodada parada, e o facilitador precisa ver o preenchimento
+// para saber quando abrir a votação sem deixar mesa para trás.
+const tablesWithPeople = computed(() => tables.value.filter((t) => t.participants_count > 0))
+const tablesWithRepresentative = computed(
+    () => tablesWithPeople.value.filter((t) => t.representative_id).length,
+)
+const claiming = computed(() => !individual.value && !isFinalRound.value && idle.value && !isDraft.value)
 
 async function authenticate() {
     masterToken.set(tokenInput.value.trim())
@@ -328,8 +358,22 @@ async function saveLayout() {
             </span>
 
             <div class="ml-auto flex items-center gap-5">
+                <!--
+                    O contador de participantes é a porta da moderação: é o
+                    número que o facilitador já olha quando quer saber quem
+                    está na sala.
+                -->
+                <button
+                    class="text-center rounded-xl px-3 py-1 -my-1 hover:bg-white/10 transition group"
+                    title="Ver todas as pessoas — buscar e bloquear no ranking"
+                    @click="peopleOpen = true"
+                >
+                    <p class="text-xl font-black tabular-nums text-white">{{ stats.participants }}</p>
+                    <p class="text-[10px] uppercase tracking-widest text-slate-500 group-hover:text-indigo-300">
+                        Participantes ▸
+                    </p>
+                </button>
                 <div v-for="stat in [
-                    { label: 'Participantes', value: stats.participants },
                     { label: 'Conectados', value: stats.connected },
                     { label: 'Votos', value: `${progress.answered}/${progress.total}` },
                     { label: 'Mesas completas', value: `${doneTables}/${stats.tables}`, hot: doneTables > 0 },
@@ -337,6 +381,9 @@ async function saveLayout() {
                     <p class="text-xl font-black tabular-nums" :class="stat.hot ? 'text-emerald-400' : 'text-white'">{{ stat.value }}</p>
                     <p class="text-[10px] uppercase tracking-widest text-slate-500">{{ stat.label }}</p>
                 </div>
+                <span v-if="blockedPeople.length" class="px-2.5 py-1 rounded-full bg-rose-500/20 text-rose-300 text-[11px] font-black">
+                    🚫 {{ blockedPeople.length }}
+                </span>
                 <span
                     class="w-3 h-3 rounded-full"
                     :class="online ? 'bg-emerald-400 shadow-[0_0_10px] shadow-emerald-400' : 'bg-rose-500 animate-pulse'"
@@ -392,6 +439,30 @@ async function saveLayout() {
                     </button>
 
                     <template v-else>
+                        <!--
+                            Tempo de candidatura: entre "Ir para a Fase 2" e
+                            "Abrir votação", as mesas escolhem quem registra.
+                            Abrir com metade das mesas sem representante joga
+                            essa escolha para dentro do cronômetro.
+                        -->
+                        <div
+                            v-if="claiming"
+                            class="rounded-2xl px-4 py-3 ring-1"
+                            :class="tablesWithRepresentative === tablesWithPeople.length
+                                ? 'bg-emerald-500/10 ring-emerald-400/40'
+                                : 'bg-amber-500/10 ring-amber-400/40'"
+                        >
+                            <p class="text-xs font-bold text-white">
+                                👑 {{ tablesWithRepresentative }} de {{ tablesWithPeople.length }} mesas
+                                já escolheram quem registra
+                            </p>
+                            <p class="text-[11px] text-slate-400 mt-0.5">
+                                {{ tablesWithRepresentative === tablesWithPeople.length
+                                    ? 'Todas prontas — pode abrir a votação.'
+                                    : 'Os celulares já mostram o botão de assumir. Dê o tempo da escolha antes de abrir.' }}
+                            </p>
+                        </div>
+
                         <!-- abrir votação: só quando a rodada está parada -->
                         <button
                             class="w-full rounded-2xl px-4 py-3.5 font-bold text-white bg-gradient-to-r from-sky-500 to-indigo-500 hover:brightness-110 active:scale-95 transition disabled:opacity-30 disabled:grayscale disabled:cursor-not-allowed"
@@ -491,7 +562,16 @@ async function saveLayout() {
                     >
                         {{ event?.missions_revealed ? '🙈 Ocultar placar por missão' : '🎭 Revelar placar por missão' }}
                     </button>
+                    <!--
+                        Some na última fase. O rótulo era calculado somando 1 à
+                        fase corrente, então na Fase 2 ele oferecia uma "Fase 3"
+                        que não existe — e o clique caía no `nextPhase()`, que
+                        na última fase **encerra o evento**. Um passo de roteiro
+                        aparente que jogava a sala inteira na tela de obrigado.
+                        Encerrar tem botão próprio, e ele confirma antes.
+                    -->
                     <button
+                        v-if="(event?.phase ?? 1) < (event?.last_phase ?? 2)"
                         class="w-full rounded-2xl px-4 py-3 font-bold text-white bg-gradient-to-r from-indigo-500 to-violet-500 hover:brightness-110 active:scale-95 transition"
                         @click="action('phase', '/admin/next-phase')"
                     >
@@ -696,6 +776,26 @@ async function saveLayout() {
                                 class="flex items-center gap-2 text-sm"
                                 :class="person.blocked ? 'opacity-50' : ''"
                             >
+                                <!--
+                                    O bloquear abre a linha, colado no nome que
+                                    ele afeta: é o nome impróprio que o
+                                    facilitador está lendo na lista, e procurar
+                                    o botão do outro lado custa o segundo em que
+                                    ele já perdeu a linha certa.
+                                -->
+                                <button
+                                    class="shrink-0 w-6 h-6 grid place-items-center rounded-lg text-[11px] transition"
+                                    :class="person.blocked
+                                        ? 'bg-rose-500 text-white'
+                                        : 'bg-slate-800 text-slate-500 hover:bg-slate-700 hover:text-rose-300'"
+                                    :disabled="busy === `block-${person.id}`"
+                                    :title="person.blocked
+                                        ? 'Bloqueado no ranking individual — clique para liberar'
+                                        : 'Tirar do ranking individual (os votos seguem contando)'"
+                                    @click="setBlocked(person.id, !person.blocked)"
+                                >
+                                    🚫
+                                </button>
                                 <PixelAvatar :seed="person.avatar_seed" :gender="person.gender" :size="24" :dim="!person.online" />
                                 <span class="min-w-0">
                                     <span class="block truncate text-slate-200" :class="person.blocked ? 'line-through' : ''">
@@ -707,21 +807,6 @@ async function saveLayout() {
                                     </span>
                                 </span>
                                 <div class="ml-auto flex items-center gap-1 shrink-0">
-                                    <!-- fora do ranking individual; o voto dele
-                                         continua somando para a mesa -->
-                                    <button
-                                        class="text-[10px] font-bold px-2 py-0.5 rounded-lg transition"
-                                        :class="person.blocked
-                                            ? 'bg-rose-500 text-white'
-                                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-rose-300'"
-                                        :disabled="busy === `block-${person.id}`"
-                                        :title="person.blocked
-                                            ? 'Bloqueado no ranking individual — clique para liberar'
-                                            : 'Tirar do ranking individual (os votos seguem contando)'"
-                                        @click="setBlocked(person.id, !person.blocked)"
-                                    >
-                                        {{ person.blocked ? '🚫' : 'bloquear' }}
-                                    </button>
                                     <!-- bloqueado não é elegível: bloquear já
                                          libera o posto, e o servidor recusa -->
                                     <button
@@ -761,14 +846,19 @@ async function saveLayout() {
                     <!-- camada 3: mesas, na ordem do critério de vitória -->
                     <table v-if="layer === 'tables'" class="w-full text-sm">
                         <thead class="text-[10px] uppercase tracking-widest text-slate-500">
+                            <!--
+                                Só pontuação. As colunas de acerto conviviam com
+                                as de ponto sob rótulos quase iguais ("✔ F1" ao
+                                lado de "F1"), e num painel lido de relance isso
+                                não se separa: o facilitador conduz pelo placar,
+                                e o acerto ele lê no comparativo do fecho.
+                            -->
                             <tr>
                                 <th class="text-left pb-2">Mesa</th>
-                                <th class="text-right pb-2" title="Acertos da mesa na Fase 1 (votos individuais dos membros)">✔ F1</th>
-                                <th class="text-right pb-2" title="A rodada final não tem alternativa certa: é pontuada à mão">✔ F2</th>
-                                <th class="text-right pb-2">F1</th>
-                                <th class="text-right pb-2">F2</th>
+                                <th class="text-right pb-2" title="Pontos dos votos individuais dos membros, Fase 1">Fase 1</th>
+                                <th class="text-right pb-2" title="Pontos das decisões de mesa, Fase 2">Fase 2</th>
                                 <th class="text-right pb-2">Total</th>
-                                <th class="text-right pb-2">Evol.</th>
+                                <th class="text-right pb-2" title="Ganho por decisão da Fase 1 para a Fase 2">Evol.</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -780,25 +870,6 @@ async function saveLayout() {
                                 <td class="py-1.5 text-white font-bold truncate">
                                     <span class="text-slate-500 tabular-nums mr-1">{{ row.position }}º</span>
                                     {{ row.icon }} {{ row.name }}
-                                </td>
-                                <td class="text-right tabular-nums text-slate-400">
-                                    {{ row.phase_one_correct }}/{{ row.phase_one_votes }}
-                                    <span v-if="row.phase_one_accuracy !== null" class="text-[10px] text-slate-500 ml-0.5">
-                                        {{ row.phase_one_accuracy }}%
-                                    </span>
-                                </td>
-                                <td
-                                    class="text-right tabular-nums"
-                                    :class="row.phase_two_accuracy > row.phase_one_accuracy ? 'text-emerald-400 font-bold' : 'text-slate-300'"
-                                >
-                                    <!-- null = rodada sem régua (a final) -->
-                                    <template v-if="row.phase_two_correct !== null">
-                                        {{ row.phase_two_correct }}/{{ row.phase_two_votes }}
-                                        <span v-if="row.phase_two_accuracy !== null" class="text-[10px] opacity-70 ml-0.5">
-                                            {{ row.phase_two_accuracy }}%
-                                        </span>
-                                    </template>
-                                    <span v-else class="text-slate-600">—</span>
                                 </td>
                                 <td class="text-right tabular-nums text-slate-400">{{ row.phase_one_points }}</td>
                                 <td class="text-right tabular-nums text-slate-300">{{ row.phase_two_points }}</td>
@@ -861,7 +932,6 @@ async function saveLayout() {
                                     <th class="text-right pb-1" title="Pontos da própria decisão, Fase 1">F1</th>
                                     <th class="text-right pb-1" title="Pontos da mesa desta pessoa, Fase 2">F2</th>
                                     <th class="text-right pb-1">Total</th>
-                                    <th class="pb-1"></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -872,6 +942,14 @@ async function saveLayout() {
                                     <td class="py-1 text-slate-500 tabular-nums w-7 align-top">{{ row.rank }}º</td>
                                     <td class="py-1 pr-2">
                                         <div class="flex items-center gap-1.5 min-w-0">
+                                            <!-- mesmo lugar da gaveta da mesa: o
+                                                 botão antes do nome que ele afeta -->
+                                            <button
+                                                class="shrink-0 w-5 h-5 grid place-items-center rounded text-[10px] text-slate-600 hover:bg-slate-800 hover:text-rose-300 transition"
+                                                :disabled="busy === `block-${row.participant_id}`"
+                                                title="Tirar do ranking individual (os votos seguem contando para a mesa e para a missão)"
+                                                @click="setBlocked(row.participant_id, true)"
+                                            >🚫</button>
                                             <PixelAvatar :seed="row.avatar_seed" :gender="row.gender" :size="20" />
                                             <span class="min-w-0">
                                                 <span class="flex items-center gap-1">
@@ -902,17 +980,9 @@ async function saveLayout() {
                                     <td class="py-1 text-right font-black tabular-nums text-white align-top">
                                         {{ row.combined_points }}
                                     </td>
-                                    <td class="py-1 pl-1 align-top">
-                                        <button
-                                            class="text-[10px] text-slate-600 hover:text-rose-300 transition"
-                                            :disabled="busy === `block-${row.participant_id}`"
-                                            title="Tirar do ranking individual (os votos seguem contando para a mesa e para a missão)"
-                                            @click="setBlocked(row.participant_id, true)"
-                                        >🚫</button>
-                                    </td>
                                 </tr>
                                 <tr v-if="!peopleRanking.length">
-                                    <td colspan="6" class="py-3 text-center text-xs text-slate-500 italic">
+                                    <td colspan="5" class="py-3 text-center text-xs text-slate-500 italic">
                                         Ninguém votou ainda.
                                     </td>
                                 </tr>
@@ -989,6 +1059,89 @@ async function saveLayout() {
                     </div>
                 </div>
             </aside>
+        </div>
+
+        <!--
+            PESSOAS: a lista inteira, para moderar. Em tela cheia porque o
+            gesto é procurar — e procurar num painel de três colunas cheias é o
+            que fazia o bloqueio ser difícil de alcançar no meio do evento.
+        -->
+        <div
+            v-if="peopleOpen"
+            class="fixed inset-0 z-40 bg-slate-950/90 backdrop-blur-sm p-6 flex"
+            @click.self="peopleOpen = false"
+        >
+            <div class="m-auto w-full max-w-4xl max-h-full rounded-3xl bg-slate-900 ring-1 ring-white/10 p-5 flex flex-col gap-4 min-h-0">
+                <div class="flex items-center gap-3 shrink-0">
+                    <h2 class="text-xl font-black text-white">Pessoas na sala</h2>
+                    <span class="px-2.5 py-0.5 rounded-full bg-white/10 text-xs font-bold text-slate-300 tabular-nums">
+                        {{ individualRanking.length }}
+                    </span>
+                    <span v-if="blockedPeople.length" class="px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 text-xs font-black">
+                        🚫 {{ blockedPeople.length }} fora do ranking
+                    </span>
+                    <button class="ml-auto text-slate-500 hover:text-white text-xl leading-none" @click="peopleOpen = false">✕</button>
+                </div>
+
+                <input
+                    v-model="peopleSearch"
+                    type="search"
+                    placeholder="Buscar por nome, hotel ou mesa…"
+                    class="w-full rounded-2xl bg-slate-800/80 px-4 py-3 text-white placeholder-slate-500 ring-2 ring-transparent focus:ring-indigo-400 outline-none transition shrink-0"
+                >
+
+                <p class="text-[11px] text-slate-500 leading-snug shrink-0">
+                    Bloquear tira a pessoa do <strong class="text-slate-400">ranking individual</strong> e do posto de
+                    representante — e nada mais. Os votos dela continuam contando para a mesa e para o grupo de missão,
+                    e o celular dela não muda de comportamento.
+                </p>
+
+                <div class="flex-1 min-h-0 overflow-y-auto -mx-1 px-1 space-y-1.5">
+                    <div
+                        v-for="person in allPeople"
+                        :key="person.participant_id"
+                        class="flex items-center gap-3 rounded-2xl px-3 py-2.5 ring-1 transition"
+                        :class="person.blocked
+                            ? 'bg-rose-500/10 ring-rose-400/30'
+                            : 'bg-slate-800/50 ring-white/5'"
+                    >
+                        <PixelAvatar :seed="person.avatar_seed" :gender="person.gender" :size="40" />
+
+                        <div class="min-w-0 flex-1">
+                            <p
+                                class="font-bold text-white truncate"
+                                :class="person.blocked ? 'line-through text-slate-400' : ''"
+                            >
+                                {{ person.name }}
+                            </p>
+                            <p class="text-[11px] text-slate-500 truncate">
+                                {{ person.table_icon }} {{ person.table }}
+                                <span v-if="person.hotel"> · 🏨 {{ person.hotel }}</span>
+                            </p>
+                        </div>
+
+                        <div class="text-right shrink-0 w-20">
+                            <p class="text-sm font-black tabular-nums text-white">{{ person.points }}</p>
+                            <p class="text-[10px] uppercase tracking-widest text-slate-600">pts · Fase 1</p>
+                        </div>
+
+                        <button
+                            class="shrink-0 w-28 rounded-xl px-3 py-2 text-xs font-black transition disabled:opacity-40"
+                            :class="person.blocked
+                                ? 'bg-slate-700 text-slate-200 hover:bg-slate-600'
+                                : 'bg-rose-500/15 text-rose-300 hover:bg-rose-500 hover:text-white'"
+                            :disabled="busy === `block-${person.participant_id}`"
+                            @click="setBlocked(person.participant_id, !person.blocked)"
+                        >
+                            {{ person.blocked ? '↩ Liberar' : '🚫 Bloquear' }}
+                        </button>
+                    </div>
+
+                    <p v-if="!allPeople.length" class="text-sm text-slate-500 italic text-center py-6">
+                        {{ peopleSearch ? 'Ninguém com esse nome, hotel ou mesa.' : 'Ninguém entrou ainda.' }}
+                    </p>
+                </div>
+            </div>
         </div>
     </div>
 </template>

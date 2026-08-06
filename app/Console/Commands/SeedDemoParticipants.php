@@ -49,6 +49,17 @@ class SeedDemoParticipants extends Command
 
         $total = (int) $this->option('participants');
 
+        // O ensaio não pode montar uma sala que a sala real não aceita: as
+        // mesas enchem em rodízio, então o teto do evento é o teto da mesa
+        // vezes o número delas. Passar disso encheria mesas de 13 e o ensaio
+        // mostraria uma lotação que ninguém vai ver ao vivo.
+        $capacity = $tables->count() * EventTable::MAX_PARTICIPANTS;
+
+        if ($total > $capacity) {
+            $this->warn("{$total} não cabem: {$tables->count()} mesas × ".EventTable::MAX_PARTICIPANTS." = {$capacity} lugares. Semeando {$capacity}.");
+            $total = $capacity;
+        }
+
         for ($i = 0; $i < $total; $i++) {
             $table = $tables[$i % $tables->count()];
 
@@ -61,7 +72,7 @@ class SeedDemoParticipants extends Command
                 'email' => $i % 2 === 0 ? 'demo'.$i.'@exemplo.com' : null,
                 'phone' => $i % 2 === 0 ? null : str_pad((string) (11900000000 + $i), 11, '0', STR_PAD_LEFT),
                 'hotel' => $this->hotels[$i % count($this->hotels)],
-                'gender' => ['male', 'female', 'custom'][$i % 3],
+                'gender' => ['male', 'female'][$i % 2],
                 'avatar_seed' => 'demo-'.$i.'-'.Str::random(6),
                 'device_token' => Str::random(48),
                 'connected' => true,

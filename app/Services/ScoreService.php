@@ -205,10 +205,15 @@ class ScoreService
 
         $position = 0;
 
-        // bloqueado não numera: ele não está disputando as posições
-        $ranked = $rows->map(fn ($row) => $row + [
-            'position' => $row['blocked'] ? null : ++$position,
-        ]);
+        // Bloqueado não numera: ele não está disputando as posições.
+        //
+        // O contador entra por **referência** de propósito. Numa arrow function
+        // ele seria capturado por valor, cada linha receberia uma cópia zerada
+        // e a lista inteira sairia como "1º" — que é exatamente o que o telão
+        // mostrava.
+        $ranked = $rows->map(function (array $row) use (&$position) {
+            return $row + ['position' => $row['blocked'] ? null : ++$position];
+        });
 
         return ($limit > 0 ? $ranked->take($limit) : $ranked)->all();
     }

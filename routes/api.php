@@ -16,6 +16,11 @@ Route::get('/status', [ParticipantController::class, 'status']);
 Route::get('/timer', [ParticipantController::class, 'timer']);
 Route::post('/vote', [ParticipantController::class, 'vote']);
 Route::post('/claim-representative', [ParticipantController::class, 'claimRepresentative']);
+Route::post('/change-table', [ParticipantController::class, 'changeTable']);
+// corrigir o próprio cadastro, só antes de o evento abrir. O GET devolve o
+// contato — o único caminho por onde ele sai, e só para o dono dele
+Route::get('/me', [ParticipantController::class, 'me']);
+Route::post('/update-profile', [ParticipantController::class, 'updateProfile']);
 
 Route::get('/display', DisplayController::class);
 

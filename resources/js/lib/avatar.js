@@ -16,12 +16,21 @@ const EYE = '#111827'
 const SCLERA = '#f8fafc'
 const MOUTH = '#b3455a'
 
-// The PRD keeps sex as the field: it only ever selects the sprite.
+/**
+ * O que a pessoa escolhe: masculino ou feminino. O campo só seleciona o sprite.
+ *
+ * O sprite `custom` continua existindo abaixo, mas fora da escolha: ele é o
+ * fallback de qualquer gender desconhecido — dados antigos, o default da
+ * coluna, uma linha criada fora do cadastro. Tirá-lo quebraria o desenho
+ * dessas linhas; tirá-lo *daqui* é o que fecha a escolha em duas.
+ */
 export const STYLES = [
     { key: 'male', label: 'Masculino' },
     { key: 'female', label: 'Feminino' },
-    { key: 'custom', label: 'Neutro' },
 ]
+
+/** A escolha é fechada: qualquer outro valor cai no primeiro estilo. */
+export const isChoosableStyle = (gender) => STYLES.some((s) => s.key === gender)
 
 // 12x12 sprite sheets. '.' transparent, H hair, S skin, E pupil, W sclera,
 // M mouth, C clothes, A accessory.

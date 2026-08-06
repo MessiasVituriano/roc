@@ -254,14 +254,60 @@ ao telão antes da hora ou a sala votou no meio de uma explicação.
   facilitador encerrar.
 - **Cadastro em uma tela**: nome, **e-mail ou telefone** (a pessoa escolhe o
   tipo; um dos dois basta e cada um é único por evento), **hotel**, avatar
-  montado e mesa. O telefone é normalizado para dígitos sem código de país, para
+  montado (**masculino ou feminino**, mais pele, cabelo e roupa) e mesa. O
+  sprite neutro continua no renderizador — é o fallback de qualquer `gender`
+  desconhecido, como o default da coluna —, mas está fora da escolha, no
+  seletor e na validação. O telefone é normalizado para dígitos sem código de país, para
   `+55 (11) 99999-9999` e `11999999999` não virarem duas pessoas.
 
   O **hotel** aparece nas duas listagens do painel — ranking individual e gaveta
   da mesa —, porque é o que distingue dois “Ana S.” numa sala de 150. O
   **contato** não: fica em `$hidden`, fora do poll de 1s, e só sai por
-  `GET /api/admin/tables/{id}`, buscado sob demanda. Nenhum dos dois vai ao
-  telão.
+  `GET /api/admin/tables/{id}` e por `GET /api/me` — o painel do facilitador e o
+  celular do próprio dono —, os dois buscados sob demanda. Nenhum dos dois vai
+  ao telão.
+- **Corrigir o cadastro, só antes de abrir.** O cadastro é feito em pé, num
+  celular, no auditório: o nome sai torto, sai só o primeiro nome, o hotel sai
+  errado. Enquanto o evento está em rascunho, a sala de espera tem **✏️ Editar
+  meus dados** — nome, contato, hotel, sexo e avatar.
+
+  Depois de aberto, o servidor recusa (409). O nome já está no telão e no
+  ranking, o avatar já é como a mesa reconhece a pessoa e a missão já foi
+  sorteada — deixar isso mudar no meio transformaria o placar numa coisa que a
+  sala não consegue acompanhar. A **mesa** continua trocável, porque ali o que
+  muda é onde a pessoa senta, não quem ela é.
+
+  As duas telas montam os mesmos campos a partir dos mesmos componentes
+  (`ContactField`, `AvatarBuilder`) e das mesmas regras (`lib/contact.js`,
+  `profileRules()`): a regra do contato — e-mail **ou** telefone, único por
+  evento — é sutil o bastante para que duas cópias divirjam sem ninguém
+  perceber.
+- **Dez pessoas por mesa** (`EventTable::MAX_PARTICIPANTS`). É o tamanho que o
+  rodízio de missões pressupõe — quatro missões nos quatro primeiros, o ciclo
+  repetido nos quatro seguintes, sobra de dois — e o teto da conversa: consenso
+  de doze em dois minutos não acontece, vira a opinião dos dois mais falantes.
+
+  A mesa cheia continua na lista do cadastro, desabilitada e marcada como
+  *completa* — sumir com ela faria a pessoa procurar uma mesa que está vendo na
+  sala. A contagem roda **dentro de uma transação com a linha da mesa travada**:
+  sem isso, os celulares que tocam "Entrar" no mesmo segundo passariam todos
+  pela verificação antes de qualquer um gravar, e o teto viraria decoração
+  justamente na corrida de entrada.
+- **Trocar de mesa depois de entrar.** Sentou na errada, o colega estava na
+  outra, a mesa do cadastro encheu antes de ele chegar nela: a tela do
+  participante troca pelo `POST /api/change-table`, com a mesma trava de
+  lotação da entrada.
+
+  Os **votos já dados não se movem**. Cada linha guarda a mesa em que a decisão
+  foi tomada, e reescrevê-la mudaria o placar de duas mesas por causa de uma
+  troca de cadeira — quem muda no meio do evento contribuiu de verdade para as
+  duas, nas rodadas que jogou em cada uma. Sair da mesa **devolve o posto de
+  representante**, que é da mesa e não da pessoa; é por isso que a troca é
+  recusada com a votação aberta, quando a saída levaria a decisão da mesa
+  junto. A **missão** é resorteada só para quem ainda não votou, pelo mesmo
+  critério de quem chega atrasado: depois do primeiro voto ela fica, porque
+  está congelada em cada linha e trocá-la mudaria a pergunta que a pessoa vinha
+  respondendo.
 - **Bloqueio no ranking individual.** O facilitador pode tirar alguém do pódio
   (🚫 na gaveta da mesa ou na aba **Individual**) sem tirá-lo da dinâmica: os
   votos continuam contando para a mesa e para o grupo de missão, e o celular da
@@ -317,6 +363,9 @@ um lançamento generoso viraria "evolução". Por isso a coluna de acertos da Fa
 | `GET` | `/api/timer` | cronômetro isolado |
 | `POST` | `/api/vote` | registra a decisão da rodada (`option_id`) |
 | `POST` | `/api/claim-representative` | assume o posto de representante da mesa |
+| `POST` | `/api/change-table` | troca de mesa (`table_id`) |
+| `GET` | `/api/me` | os próprios dados, **com o contato**, para o formulário de edição |
+| `POST` | `/api/update-profile` | corrige o próprio cadastro (só com o evento em rascunho) |
 | `GET` | `/api/display` | **poll de 1s** do telão (inclui o mapa das mesas) |
 | `GET` | `/api/admin/overview` | **poll de 1s** do painel master |
 | `POST` | `/api/admin/{open,start,close,reveal,next,previous,end}` | controle da rodada |
