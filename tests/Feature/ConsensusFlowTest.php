@@ -1224,6 +1224,79 @@ class ConsensusFlowTest extends TestCase
     }
 
     /**
+     * O ranking individual numera de verdade — 1º, 2º, 3º.
+     *
+     * O contador vivia numa arrow function, que o captura por valor: cada linha
+     * recebia uma cópia zerada e a lista inteira saía como "1º". No painel isso
+     * passava porque ele renumera no cliente ao reordenar; no telão, não.
+     */
+    public function test_the_individual_ranking_numbers_every_position(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $tokens = collect(['Ana', 'Bruno', 'Carla'])
+            ->mapWithKeys(fn (string $name) => [$name => $this->join($name, 1)]);
+
+        $this->postJson('/api/admin/start', [], $this->master);
+
+        // pontuações diferentes, para a ordem não depender de desempate
+        $question = $this->question(1, 1);
+        foreach ([['Ana', 150], ['Bruno', 80], ['Carla', -50]] as [$name, $points]) {
+            $this->postJson('/api/vote', [
+                'option_id' => $this->optionWorth($question, $points),
+            ], $this->auth($tokens[$name]))->assertCreated();
+        }
+
+        $ranking = collect($this->getJson('/api/admin/overview', $this->master)->json('individual_ranking'));
+
+        $this->assertSame([1, 2, 3], $ranking->pluck('position')->all());
+        $this->assertSame(['Ana', 'Bruno', 'Carla'], $ranking->pluck('name')->all());
+
+        // e o bloqueado sai da numeração sem deslocar quem ficou
+        $bruno = Participant::where('name', 'Bruno')->value('id');
+        $this->postJson("/api/admin/participants/{$bruno}/block", ['blocked' => true], $this->master);
+
+        $ranking = collect($this->getJson('/api/admin/overview', $this->master)->json('individual_ranking'));
+
+        $this->assertNull($ranking->firstWhere('name', 'Bruno')['position']);
+        $this->assertSame([1, 2], $ranking->whereNotNull('position')->pluck('position')->values()->all());
+    }
+
+    /**
+     * O gabarito do fecho carrega o índice de respostas dos dois lados: as duas
+     * fases fazem a mesma pergunta, então os percentuais se comparam direto.
+     */
+    public function test_the_answer_key_carries_the_response_index_for_both_phases(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+
+        // sozinha erra a rodada 1; em mesa, acerta
+        $this->postJson('/api/admin/start', [], $this->master);
+        $this->postJson('/api/vote', [
+            'option_id' => $this->optionWorth($this->question(1, 1), -50),
+        ], $this->auth($ana))->assertCreated();
+
+        $this->startPhaseTwo();
+        $this->postJson('/api/vote', [
+            'option_id' => $this->optionWorth($this->question(2, 1), 150),
+        ], $this->auth($ana))->assertCreated();
+
+        $this->postJson('/api/admin/answers/reveal', [], $this->master)->assertOk();
+
+        $key = collect($this->getJson('/api/display')->json('answer_key'))->firstWhere('round', 1);
+
+        $this->assertSame(0, $key['individual_accuracy']);
+        $this->assertSame(100, $key['table_accuracy']);
+        // e o gabarito é o gabarito: a melhor alternativa, com o que ela vale
+        $this->assertSame(150, $key['best_points']);
+        $this->assertNotNull($key['best_text']);
+
+        // rodada que a mesa não jogou não inventa índice
+        $round2 = collect($this->getJson('/api/display')->json('answer_key'))->firstWhere('round', 2);
+        $this->assertNull($round2['table_accuracy']);
+    }
+
+    /**
      * Corrigir o cadastro na sala de espera: o nome é digitado em pé, num
      * celular, e sai torto. Enquanto ninguém votou, consertar não custa nada.
      */

@@ -71,14 +71,19 @@ const winner = computed(() => tableRanking.value?.[0] ?? null)
 
 // --- premiação -----------------------------------------------------------
 
-// o pódio na ordem em que se olha para ele: 2º à esquerda, campeã ao centro
+// O pódio na ordem em que se olha para ele: 2º à esquerda, campeã ao centro.
+//
+// A altura é **mínima**, não fixa. Com `h-*`, os 80px do terceiro lugar menos
+// os 40px de padding deixavam 40px para medalha + posição + nome + pontos:
+// o nome da mesa era empurrado para fora da caixa e sumia do telão. A escada
+// do pódio continua — só deixou de cortar o que ela deveria anunciar.
 const podium = computed(() => {
     const [first, second, third] = tableRanking.value ?? []
 
     return [
-        { medal: '🥈', place: 2, row: second, height: 'h-28', tone: 'text-slate-200' },
-        { medal: '🏆', place: 1, row: first, height: 'h-40', tone: 'text-amber-300' },
-        { medal: '🥉', place: 3, row: third, height: 'h-20', tone: 'text-orange-300' },
+        { medal: '🥈', place: 2, row: second, height: 'min-h-32', tone: 'text-slate-200' },
+        { medal: '🏆', place: 1, row: first, height: 'min-h-44', tone: 'text-amber-300' },
+        { medal: '🥉', place: 3, row: third, height: 'min-h-28', tone: 'text-orange-300' },
     ].filter((slot) => slot.row)
 })
 
@@ -96,6 +101,12 @@ const topIndividuals = computed(() => (state.value?.individual_ranking ?? []).sl
 // da 4ª mesa em diante: quem não subiu ao pódio ainda quer se achar na lista
 const runnersUp = computed(() => (tableRanking.value ?? []).slice(3))
 
+// Só as mesas que jogaram. Numa sala em que nem toda mesa encheu, as vazias
+// entram no ranking com zero e empurram o placar real para fora da tela.
+const scoredTables = computed(() =>
+    (tableRanking.value ?? []).filter((row) => row.phase_one_votes > 0 || row.phase_two_votes > 0),
+)
+
 // Cores das barras da revelação. A cor real da alternativa vem da régua de
 // pontos (verde = melhor, vermelho = pior), então antes do gabarito ela não
 // pode aparecer: estas quatro só diferenciam A/B/C/D, sem sugerir certo ou
@@ -107,14 +118,15 @@ const barColor = (option, i) => option.color ?? NEUTRAL_BARS[i % NEUTRAL_BARS.le
 const answerKey = computed(() => state.value?.answer_key ?? [])
 const comparison = computed(() => state.value?.phase_comparison ?? null)
 
-// O fecho em números. A Fase 1 tem régua e por isso tem acerto; a rodada final
-// é uma missão aberta, pontuada à mão — o que compara as duas é valor gerado
-// por decisão.
+// O fecho em números. As duas fases jogam os mesmos cinco cenários, então os
+// dois lados têm acerto e média por decisão — a rodada final, pontuada à mão,
+// fica fora das duas medidas (entra só nos pontos).
 const closing = computed(() => {
     if (!comparison.value) return null
 
     return {
         accuracy: comparison.value.individual.accuracy,
+        tableAccuracy: comparison.value.table.accuracy,
         individual: comparison.value.individual.average,
         table: comparison.value.table.average,
         delta: comparison.value.average_delta,
@@ -193,7 +205,8 @@ const closing = computed(() => {
                         <p class="text-sm font-bold uppercase tracking-[0.4em] text-emerald-300">O comparativo</p>
                         <h2 class="text-4xl font-black text-white">Sozinho e depois em mesa</h2>
                         <p class="text-slate-400">
-                            Cinco decisões individuais, uma decisão de mesa. Só mudou quem decidiu.
+                            Os mesmos cinco cenários, decididos sozinho e depois em mesa.
+                            Só mudou quem decidiu.
                         </p>
                     </div>
 
@@ -229,61 +242,117 @@ const closing = computed(() => {
                             >
                                 {{ closing.table }}
                             </p>
-                            <p class="text-sm text-emerald-200/60 mt-1">pts por mesa · rodada final</p>
+                            <p class="text-sm text-emerald-200/60 mt-1">
+                                pts por decisão · Fase 2
+                                <span v-if="closing.tableAccuracy !== null"> · ✔ {{ closing.tableAccuracy }}% de acerto</span>
+                            </p>
                         </div>
                     </div>
 
-                    <div class="flex-1 grid grid-cols-[1fr_minmax(0,22rem)] gap-5 min-h-0">
-                        <!-- o gabarito, rodada a rodada -->
-                        <div class="min-h-0 overflow-y-auto space-y-2 pr-1">
-                            <div
-                                v-for="row in answerKey"
-                                :key="row.round"
-                                class="rounded-2xl bg-slate-900/60 ring-1 ring-white/10 px-4 py-3 grid grid-cols-[minmax(0,20rem)_1fr_auto] gap-4 items-center"
-                            >
-                                <div class="min-w-0">
-                                    <p class="text-[10px] font-black uppercase tracking-widest text-amber-300">
-                                        Rodada {{ row.round }} · {{ row.label }}
-                                    </p>
-                                    <p class="text-xs text-white font-bold truncate mt-0.5">✅ {{ row.best_text }}</p>
+                    <div class="flex-1 grid grid-cols-[1fr_minmax(0,24rem)] gap-5 min-h-0">
+                        <!--
+                            GABARITO: a melhor decisão de cada cenário, com o
+                            que ela vale. É isto que a sala veio conferir — e
+                            era o que estava se perdendo atrás de uma barra de
+                            percentual sem nome.
+                        -->
+                        <section class="rounded-3xl bg-slate-900/60 ring-1 ring-white/10 p-4 flex flex-col min-h-0">
+                            <div class="flex items-baseline gap-3 shrink-0">
+                                <p class="text-[11px] font-black uppercase tracking-[0.3em] text-amber-300">Gabarito</p>
+                                <p class="text-[11px] text-slate-500">a melhor decisão de cada cenário</p>
+                                <div class="ml-auto flex items-center gap-3 text-[10px] uppercase tracking-widest">
+                                    <span class="text-slate-500">Índice de respostas</span>
+                                    <span class="text-sky-300">sozinho</span>
+                                    <span class="text-emerald-300">em mesa</span>
                                 </div>
+                            </div>
 
-                                <div class="flex items-center gap-2">
-                                    <span class="text-[9px] uppercase tracking-widest text-slate-500 w-14 shrink-0">sozinho</span>
-                                    <div class="flex-1 h-3 rounded-full bg-slate-800 overflow-hidden">
-                                        <div class="h-full rounded-full bg-sky-400/70" :style="{ width: (row.individual_accuracy ?? 0) + '%' }" />
+                            <div class="flex-1 min-h-0 overflow-y-auto mt-3 space-y-2 pr-1">
+                                <div
+                                    v-for="row in answerKey"
+                                    :key="row.round"
+                                    class="rounded-2xl bg-slate-950/50 ring-1 ring-white/10 px-4 py-2.5 grid grid-cols-[1fr_auto] gap-4 items-center"
+                                >
+                                    <div class="min-w-0">
+                                        <p class="text-[10px] font-black uppercase tracking-widest text-amber-300">
+                                            Rodada {{ row.round }} · {{ row.label }}
+                                        </p>
+                                        <p class="text-sm text-white font-bold truncate mt-0.5">
+                                            ✅ {{ row.best_text }}
+                                            <span class="text-emerald-300 tabular-nums ml-1">+{{ row.best_points }}</span>
+                                        </p>
+                                    </div>
+
+                                    <!--
+                                        ÍNDICE DE RESPOSTAS: quantos chegaram
+                                        nessa alternativa. Dois números, porque
+                                        as duas fases fazem a mesma pergunta —
+                                        é a comparação, rodada a rodada.
+                                    -->
+                                    <div class="flex items-center gap-3 shrink-0">
+                                        <div class="text-right">
+                                            <p class="text-lg font-black tabular-nums text-sky-300 leading-none">
+                                                {{ row.individual_accuracy ?? '—' }}<span class="text-xs">%</span>
+                                            </p>
+                                            <p class="text-[9px] uppercase tracking-widest text-slate-600 mt-0.5">sozinho</p>
+                                        </div>
+                                        <div class="text-right w-16">
+                                            <p
+                                                class="text-lg font-black tabular-nums leading-none"
+                                                :class="row.table_accuracy !== null && row.individual_accuracy !== null
+                                                    && row.table_accuracy > row.individual_accuracy
+                                                    ? 'text-emerald-300' : 'text-slate-300'"
+                                            >
+                                                {{ row.table_accuracy ?? '—' }}<span class="text-xs">%</span>
+                                            </p>
+                                            <p class="text-[9px] uppercase tracking-widest text-slate-600 mt-0.5">em mesa</p>
+                                        </div>
                                     </div>
                                 </div>
-
-                                <p class="text-xl font-black tabular-nums w-16 text-right text-white">
-                                    {{ row.individual_accuracy ?? '—' }}%
-                                </p>
                             </div>
-                        </div>
+                        </section>
 
-                        <!-- a rodada final: a pontuação que o facilitador lançou -->
-                        <section class="rounded-3xl bg-slate-900/60 ring-1 ring-white/10 p-4 flex flex-col min-h-0">
-                            <p class="text-[11px] font-black uppercase tracking-[0.3em] text-amber-300 shrink-0">
-                                A rodada final
-                            </p>
-                            <p class="text-[11px] text-slate-400 italic leading-snug mt-1 shrink-0">
-                                “{{ finalRound?.context }}”
-                            </p>
-                            <div class="flex-1 min-h-0 overflow-y-auto mt-3 space-y-1 pr-1">
-                                <div
-                                    v-for="(row, i) in finalScores"
-                                    :key="row.table_id"
-                                    class="flex items-center gap-2 text-sm rounded-xl px-2 py-1"
-                                    :class="i === 0 ? 'bg-amber-500/15 ring-1 ring-amber-400/40' : ''"
-                                >
-                                    <span class="w-6 text-right tabular-nums text-slate-500 shrink-0">{{ i + 1 }}º</span>
-                                    <span class="shrink-0">{{ row.icon }}</span>
-                                    <span class="flex-1 min-w-0 truncate text-slate-200 font-bold">{{ row.name }}</span>
-                                    <span class="tabular-nums font-black text-white shrink-0">{{ row.points }}</span>
+                        <!--
+                            PONTUAÇÃO: os dois placares que o evento produziu —
+                            quem decidiu melhor sozinho e qual mesa somou mais.
+                        -->
+                        <section class="rounded-3xl bg-slate-900/60 ring-1 ring-white/10 p-4 flex flex-col min-h-0 gap-3">
+                            <p class="text-[11px] font-black uppercase tracking-[0.3em] text-white shrink-0">Pontuação</p>
+
+                            <div class="flex-1 min-h-0 flex flex-col">
+                                <p class="text-[10px] uppercase tracking-widest text-sky-300 shrink-0">Individual</p>
+                                <div class="flex-1 min-h-0 overflow-y-auto mt-1.5 space-y-0.5 pr-1">
+                                    <div
+                                        v-for="person in topIndividuals"
+                                        :key="person.participant_id"
+                                        class="flex items-center gap-2 text-xs rounded-lg px-1.5 py-0.5"
+                                        :class="person.position === 1 ? 'bg-sky-500/15' : ''"
+                                    >
+                                        <span class="w-5 text-right tabular-nums text-slate-500 shrink-0">{{ person.position }}º</span>
+                                        <PixelAvatar :seed="person.avatar_seed" :gender="person.gender" :size="18" />
+                                        <span class="flex-1 min-w-0 truncate text-slate-200 font-bold">{{ person.name }}</span>
+                                        <span class="tabular-nums font-black text-white shrink-0">{{ person.points }}</span>
+                                    </div>
+                                    <p v-if="!topIndividuals.length" class="text-xs text-slate-500 italic">Sem votos.</p>
                                 </div>
-                                <p v-if="!finalScores.length" class="text-sm text-slate-500 italic">
-                                    Nenhuma mesa pontuada.
-                                </p>
+                            </div>
+
+                            <div class="flex-1 min-h-0 flex flex-col border-t border-white/10 pt-3">
+                                <p class="text-[10px] uppercase tracking-widest text-emerald-300 shrink-0">Mesas</p>
+                                <div class="flex-1 min-h-0 overflow-y-auto mt-1.5 space-y-0.5 pr-1">
+                                    <div
+                                        v-for="row in scoredTables"
+                                        :key="row.table_id"
+                                        class="flex items-center gap-2 text-xs rounded-lg px-1.5 py-0.5"
+                                        :class="row.position === 1 ? 'bg-emerald-500/15' : ''"
+                                    >
+                                        <span class="w-5 text-right tabular-nums text-slate-500 shrink-0">{{ row.position }}º</span>
+                                        <span class="shrink-0">{{ row.icon }}</span>
+                                        <span class="flex-1 min-w-0 truncate text-slate-200 font-bold">{{ row.name }}</span>
+                                        <span class="tabular-nums font-black text-white shrink-0">{{ row.total_points }}</span>
+                                    </div>
+                                    <p v-if="!scoredTables.length" class="text-xs text-slate-500 italic">Sem decisões de mesa.</p>
+                                </div>
                             </div>
                         </section>
                     </div>
@@ -506,12 +575,12 @@ const closing = computed(() => {
                                 <p class="text-[9px] uppercase tracking-widest text-slate-500">sozinhos</p>
                             </div>
                             <div>
-                                <!-- a rodada final não tem acerto a contar: o
-                                     número dela é a pontuação do facilitador -->
+                                <!-- os cinco cenários de mesa mais a rodada
+                                     final, que o facilitador pontuou à mão -->
                                 <p class="text-xl font-black text-emerald-300 tabular-nums">
                                     {{ winner.phase_two_points }} pts
                                 </p>
-                                <p class="text-[9px] uppercase tracking-widest text-slate-500">rodada final</p>
+                                <p class="text-[9px] uppercase tracking-widest text-slate-500">decidindo em mesa</p>
                             </div>
                             <div class="ml-auto text-right">
                                 <BrandLogo size="sm" />

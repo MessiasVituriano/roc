@@ -409,10 +409,14 @@ class EventStateService
     /**
      * O gabarito, liberado só no fecho.
      *
-     * Cobre as cinco rodadas da Fase 1 — são as únicas com régua. A rodada
-     * final da Fase 2 é uma missão aberta, pontuada à mão, e por isso aparece
-     * no payload por outro caminho (`final_round`), como pontuação por mesa e
-     * não como alternativa certa.
+     * Cobre os cinco cenários com régua. Como a Fase 2 rejoga os mesmos cinco,
+     * cada linha carrega o **índice de respostas dos dois lados**: quanto da
+     * sala chegou sozinha à melhor decisão e quantas mesas chegaram juntas. É a
+     * mesma pergunta e o mesmo gabarito, então os dois números se comparam
+     * diretamente — é isso que o fecho mostra.
+     *
+     * A rodada final fica de fora: é uma missão aberta, pontuada à mão, e
+     * aparece no payload por outro caminho (`final_round`).
      *
      * @return array<int, array<string, mixed>>
      */
@@ -425,14 +429,29 @@ class EventStateService
             ->orderBy('round')
             ->get();
 
+        // o gêmeo de mesa de cada cenário, pela rodada
+        $mirrored = $event->questions()
+            ->with('options')
+            ->where('phase', 2)
+            ->where('is_bonus', false)
+            ->where('manual_scoring', false)
+            ->get()
+            ->keyBy('round');
+
         $byPerson = ParticipantVote::whereIn('question_id', $questions->pluck('id'))
             ->selectRaw('question_id, option_id, count(*) as total')
             ->groupBy('question_id', 'option_id')
             ->get()
             ->mapWithKeys(fn ($row) => ["{$row->question_id}:{$row->option_id}" => (int) $row->total]);
 
+        $byTable = TableVote::whereIn('question_id', $mirrored->pluck('id'))
+            ->selectRaw('question_id, option_id, count(*) as total')
+            ->groupBy('question_id', 'option_id')
+            ->get()
+            ->mapWithKeys(fn ($row) => ["{$row->question_id}:{$row->option_id}" => (int) $row->total]);
+
         return $questions
-            ->map(function (Question $question) use ($byPerson) {
+            ->map(function (Question $question) use ($byPerson, $byTable, $mirrored) {
                 $best = $question->bestOption();
 
                 $options = $question->options->map(fn ($option) => [
@@ -458,11 +477,34 @@ class EventStateService
                     'individual_accuracy' => $people > 0
                         ? (int) round(($winner['individual_votes'] ?? 0) / $people * 100)
                         : null,
+                    // e quantas mesas chegaram nela conversando
+                    'table_accuracy' => $this->bestShare($mirrored->get($question->round), $byTable),
                     'options' => $options->sortByDesc('points')->values()->all(),
                 ];
             })
             ->values()
             ->all();
+    }
+
+    /**
+     * Quanto por cento das decisões de uma pergunta caiu na melhor alternativa.
+     *
+     * @param  Collection<string, int>  $votes  contagem por "question:option"
+     */
+    protected function bestShare(?Question $question, Collection $votes): ?int
+    {
+        if (! $question) {
+            return null;
+        }
+
+        $best = $question->bestOption();
+        $total = $question->options->sum(fn ($o) => $votes["{$question->id}:{$o->id}"] ?? 0);
+
+        if ($total === 0 || ! $best) {
+            return null;
+        }
+
+        return (int) round(($votes["{$question->id}:{$best->id}"] ?? 0) / $total * 100);
     }
 
     /**
