@@ -372,17 +372,23 @@ class EventFlowService
             : TableVote::where('question_id', $question->id)->exists();
     }
 
-    /** A virada de fase: o placar por grupo de missão vai ao telão. */
-    public function revealMissions(Event $event): Event
+    /**
+     * A virada de fase: como a sala respondeu vai ao telão.
+     *
+     * Cada alternativa das rodadas da Fase 1 com o percentual que a escolheu —
+     * a divergência da sala, sem gabarito e sem pontos. É o que dá sentido a
+     * decidir de novo em mesa: ver que a sala se dividiu.
+     */
+    public function revealResponses(Event $event): Event
     {
-        $event->update(['missions_revealed' => true]);
+        $event->update(['responses_revealed' => true]);
 
         return $event->refresh();
     }
 
-    public function hideMissions(Event $event): Event
+    public function hideResponses(Event $event): Event
     {
-        $event->update(['missions_revealed' => false]);
+        $event->update(['responses_revealed' => false]);
 
         return $event->refresh();
     }

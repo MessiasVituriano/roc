@@ -341,12 +341,10 @@ class ConsensusFlowTest extends TestCase
             $this->assertNotNull($row['correct']);
         }
 
-        // mas não no telão da virada, que acontece antes da Fase 2
-        $this->postJson('/api/admin/missions/reveal', [], $this->master);
-        foreach ($this->getJson('/api/display')->json('mission_ranking') as $row) {
-            $this->assertNull($row['correct'], 'acerto por missão não pode ir ao telão antes do fim');
-            $this->assertNull($row['accuracy']);
-        }
+        // e o recorte por missão nunca vai ao telão: ele é leitura do
+        // facilitador, para narrar o viés
+        $this->postJson('/api/admin/responses/reveal', [], $this->master);
+        $this->assertArrayNotHasKey('mission_ranking', $this->getJson('/api/display')->json());
 
         // Fase 2: a mesa decide a missão final e o facilitador lança os pontos
         $this->postJson('/api/admin/next-phase', [], $this->master);
@@ -624,11 +622,73 @@ class ConsensusFlowTest extends TestCase
         $this->assertEquals(150, $ranking[0]['average']);
         $this->assertEquals(-50, $ranking[3]['average']);
 
-        // o recorte por missão só vai ao telão na virada de fase
+        // o recorte por missão é só do painel — nem antes nem depois da virada
         $this->assertArrayNotHasKey('mission_ranking', $this->getJson('/api/display')->json());
 
-        $this->postJson('/api/admin/missions/reveal', [], $this->master)->assertOk();
-        $this->assertArrayHasKey('mission_ranking', $this->getJson('/api/display')->json());
+        $this->postJson('/api/admin/responses/reveal', [], $this->master)->assertOk();
+        $this->assertArrayNotHasKey('mission_ranking', $this->getJson('/api/display')->json());
+    }
+
+    /**
+     * A virada de fase mostra **como a sala respondeu**: cada alternativa com o
+     * percentual que a escolheu.
+     *
+     * Sem gabarito e sem pontos, e na ordem original das alternativas — ordenar
+     * por régua poria a melhor sempre no topo, o que entregaria a resposta
+     * certa antes da Fase 2.
+     */
+    public function test_the_phase_turn_reveals_how_the_room_answered(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $tokens = collect(['Ana', 'Bruno', 'Carla', 'Diego'])
+            ->map(fn (string $name) => $this->join($name, 1));
+
+        $this->postJson('/api/admin/start', [], $this->master);
+
+        // três escolhem a melhor, uma escolhe a pior: 75% / 25%
+        $question = $this->question(1, 1);
+        foreach ($tokens->take(3) as $token) {
+            $this->postJson('/api/vote', ['option_id' => $this->optionWorth($question, 150)], $this->auth($token));
+        }
+        $this->postJson('/api/vote', [
+            'option_id' => $this->optionWorth($question, -50),
+        ], $this->auth($tokens->last()));
+
+        // antes do clique, o telão não tem a distribuição
+        $this->assertArrayNotHasKey('response_distribution', $this->getJson('/api/display')->json());
+
+        $this->postJson('/api/admin/responses/reveal', [], $this->master)->assertOk();
+
+        $rodada = collect($this->getJson('/api/display')->json('response_distribution'))
+            ->firstWhere('round', 1);
+
+        $this->assertSame(4, $rodada['total_votes']);
+
+        // A ordem é a do **cadastro**, não a da régua: no conteúdo atual a de
+        // +150 é a primeira e a de −50 é a terceira, e é assim que sai. Por
+        // isso os índices são derivados — fixá-los faria o teste passar a
+        // depender de qual alternativa é a melhor, que é justo o que a tela
+        // não pode entregar.
+        $ordem = $question->options->sortBy('order')->values();
+        $melhor = $ordem->search(fn ($o) => $o->points === 150);
+        $pior = $ordem->search(fn ($o) => $o->points === -50);
+
+        $percentuais = collect($rodada['options'])->pluck('percent');
+        $this->assertSame(75, $percentuais[$melhor]);
+        $this->assertSame(25, $percentuais[$pior]);
+        $this->assertSame(100, $percentuais->sum());
+
+        $this->assertSame(
+            $ordem->pluck('text')->all(),
+            collect($rodada['options'])->pluck('text')->all(),
+        );
+        foreach ($rodada['options'] as $option) {
+            $this->assertArrayNotHasKey('points', $option);
+            $this->assertArrayNotHasKey('is_best', $option);
+        }
+
+        $this->postJson('/api/admin/responses/hide', [], $this->master)->assertOk();
+        $this->assertArrayNotHasKey('response_distribution', $this->getJson('/api/display')->json());
     }
 
     /**

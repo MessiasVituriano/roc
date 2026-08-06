@@ -691,10 +691,14 @@ async function saveLayout() {
                     </p>
                     <button
                         class="w-full rounded-2xl px-4 py-3 font-black text-white bg-gradient-to-r from-amber-500 to-yellow-500 hover:brightness-110 active:scale-95 transition"
-                        @click="action('missions', event?.missions_revealed ? '/admin/missions/hide' : '/admin/missions/reveal')"
+                        @click="action('responses', event?.responses_revealed ? '/admin/responses/hide' : '/admin/responses/reveal')"
                     >
-                        {{ event?.missions_revealed ? '🙈 Ocultar placar por missão' : '🎭 Revelar placar por missão' }}
+                        {{ event?.responses_revealed ? '🙈 Ocultar as respostas' : '🎭 Revelar como a sala respondeu' }}
                     </button>
+                    <p v-if="!event?.responses_revealed" class="text-[11px] text-amber-200/70 leading-snug">
+                        Cada alternativa com o percentual que a escolheu. Sem gabarito e sem pontos —
+                        é a divisão da sala, não a resposta certa.
+                    </p>
                     <!--
                         Some na última fase. O rótulo era calculado somando 1 à
                         fase corrente, então na Fase 2 ele oferecia uma "Fase 3"

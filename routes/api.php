@@ -53,8 +53,8 @@ Route::prefix('admin')->middleware('master')->group(function () {
 
     // virada de fase e desempate
     Route::post('/missions/assign', [AdminController::class, 'assignMissions']);
-    Route::post('/missions/reveal', [AdminController::class, 'revealMissions']);
-    Route::post('/missions/hide', [AdminController::class, 'hideMissions']);
+    Route::post('/responses/reveal', [AdminController::class, 'revealResponses']);
+    Route::post('/responses/hide', [AdminController::class, 'hideResponses']);
     // o fecho da Fase 1: cada pessoa recebe o próprio total, sem gabarito
     Route::post('/phase-one/reveal', [AdminController::class, 'revealPhaseOne']);
     Route::post('/phase-one/hide', [AdminController::class, 'hidePhaseOne']);

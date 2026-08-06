@@ -5,7 +5,6 @@ import { usePolling } from '../composables/usePolling'
 import AuditoriumMap from '../components/AuditoriumMap.vue'
 import CountdownTimer from '../components/CountdownTimer.vue'
 import ProgressBar from '../components/ProgressBar.vue'
-import ScoreBars from '../components/ScoreBars.vue'
 import JoinQrCode from '../components/JoinQrCode.vue'
 import BrandLogo from '../components/BrandLogo.vue'
 import LoadingScreen from '../components/LoadingScreen.vue'
@@ -20,7 +19,6 @@ const timer = computed(() => state.value?.timer ?? { remaining: 0, duration: 1 }
 const progress = computed(() => state.value?.progress ?? { answered: 0, total: 0, percent: 0, unit: 'participants' })
 const stats = computed(() => state.value?.stats ?? { participants: 0, connected: 0, tables: 0 })
 const results = computed(() => state.value?.results ?? null)
-const missionRanking = computed(() => state.value?.mission_ranking ?? null)
 const tableRanking = computed(() => state.value?.table_ranking ?? [])
 
 const individual = computed(() => event.value?.phase_mode === 'individual')
@@ -49,27 +47,14 @@ const view = computed(() => {
     // a rodada a mais. Sem pontuação — ela sai no fecho. O servidor só acende
     // isso depois da rodada final da Fase 2, então aqui não há fase a conferir.
     if (needsTieBreak.value) return 'tiebreak'
-    if (event.value.missions_revealed) return 'missions'
+    if (event.value.responses_revealed) return 'responses'
     return 'lobby'
 })
 
-// escala as barras pela maior média, para o contraste entre missões saltar
-const missionRows = computed(() => {
-    const rows = missionRanking.value ?? []
-    const max = Math.max(1, ...rows.map((r) => Math.abs(r.average)))
-
-    return rows.map((r) => ({
-        key: r.mission_id,
-        label: r.name,
-        icon: r.icon,
-        color: r.color,
-        value: r.average,
-        sublabel: r.accuracy !== null
-            ? `${r.participants} pessoas · ✔ ${r.accuracy}% de acerto · ${r.points} pts`
-            : `${r.participants} pessoas · ${r.points} pts`,
-        percent: Math.round((Math.abs(r.average) / max) * 100),
-    }))
-})
+// as rodadas que a sala jogou, com a divisão de cada uma
+const responseRows = computed(() =>
+    (state.value?.response_distribution ?? []).filter((row) => row.total_votes > 0),
+)
 
 const winner = computed(() => tableRanking.value?.[0] ?? null)
 
@@ -192,21 +177,63 @@ const closing = computed(() => {
         </header>
 
         <Transition name="fade" mode="out-in">
-            <!-- A VIRADA DE FASE: o viés de cada missão aparece no placar -->
-            <main v-if="view === 'missions'" key="missions" class="flex-1 grid place-items-center p-10">
-                <div class="w-full max-w-5xl space-y-8">
-                    <div class="text-center space-y-2">
-                        <p class="text-sm font-bold uppercase tracking-[0.4em] text-amber-300">A virada</p>
-                        <h2 class="text-4xl font-black text-white">Média de valor gerado por missão</h2>
-                        <p class="text-slate-400">
-                            Mesma régua, missões diferentes — e decisões diferentes.
-                        </p>
-                    </div>
-                    <ScoreBars :rows="missionRows" suffix=" pts" />
-                    <p class="text-center text-lg text-slate-300 italic max-w-3xl mx-auto">
-                        “Se eu retirasse o nome das missões e mostrasse só os números do hotel,
-                        você ainda tomaria a mesma decisão?”
+            <!--
+                A VIRADA DE FASE: como a sala respondeu.
+
+                Cada alternativa com o percentual que a escolheu, na ordem
+                original e sem pontuação — ordenar por régua poria a melhor
+                sempre no topo, e mostrar pontos seria o gabarito com outro
+                nome. O que a sala precisa ver aqui é que ela se dividiu; a
+                resposta certa vem no fecho.
+            -->
+            <main v-if="view === 'responses'" key="responses" class="flex-1 flex flex-col p-8 min-h-0">
+                <div class="text-center space-y-1 shrink-0">
+                    <p class="text-sm font-bold uppercase tracking-[0.4em] text-amber-300">A virada</p>
+                    <h2 class="text-4xl font-black text-white">Como a sala respondeu</h2>
+                    <p class="text-slate-400">
+                        Mesma pergunta, respostas diferentes. Agora vocês decidem juntos.
                     </p>
+                </div>
+
+                <div class="flex-1 min-h-0 overflow-y-auto mt-6 grid grid-cols-2 gap-4 content-start pr-1">
+                    <section
+                        v-for="row in responseRows"
+                        :key="row.round"
+                        class="rounded-3xl bg-slate-900/60 ring-1 ring-white/10 p-4"
+                    >
+                        <p class="text-[10px] font-black uppercase tracking-widest text-amber-300">
+                            Rodada {{ row.round }} · {{ row.label }}
+                        </p>
+                        <p class="text-sm font-bold text-white truncate">{{ row.title }}</p>
+
+                        <!--
+                            Texto em cima, barra fina embaixo. Com o texto
+                            sobreposto à barra, uma alternativa de 17% ficava
+                            metade sobre a cor e metade sobre o fundo — e as
+                            alternativas aqui são frases, não rótulos.
+                        -->
+                        <div class="mt-3 space-y-2.5">
+                            <div v-for="(option, i) in row.options" :key="option.option_id">
+                                <div class="flex items-baseline gap-2">
+                                    <span class="w-4 text-xs font-black shrink-0" :style="{ color: NEUTRAL_BARS[i % 4] }">
+                                        {{ 'ABCD'[i] }}
+                                    </span>
+                                    <span class="flex-1 min-w-0 text-[13px] text-slate-200 leading-snug line-clamp-2">
+                                        {{ option.text }}
+                                    </span>
+                                    <span class="w-12 text-right text-base font-black tabular-nums text-white shrink-0">
+                                        {{ option.percent }}%
+                                    </span>
+                                </div>
+                                <div class="h-1.5 rounded-full bg-slate-800 overflow-hidden mt-1 ml-6">
+                                    <div
+                                        class="h-full rounded-full transition-all duration-1000"
+                                        :style="{ width: option.percent + '%', background: NEUTRAL_BARS[i % 4] }"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    </section>
                 </div>
             </main>
 
