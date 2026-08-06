@@ -200,6 +200,35 @@ class AdminController extends Controller
     }
 
     /**
+     * Recarrega as perguntas a partir do seeder — o conteúdo do evento vive lá.
+     *
+     * Existe porque trocar o conteúdo não deveria custar o evento inteiro:
+     * resetar apaga participantes, mesas e layout, e num dia de evento isso
+     * significa 95 pessoas se cadastrando de novo. Aqui só as perguntas são
+     * recriadas.
+     *
+     * Recusa com voto registrado. Apagar uma pergunta apaga os votos dela em
+     * cascata, e um placar meio apagado é pior do que qualquer conteúdo velho.
+     */
+    public function reloadQuestions(): JsonResponse
+    {
+        $event = $this->requireEvent();
+
+        $votes = ParticipantVote::whereIn('question_id', $event->questions()->select('id'))->count()
+            + TableVote::whereIn('question_id', $event->questions()->select('id'))->count();
+
+        abort_if(
+            $votes > 0,
+            409,
+            "O evento já tem {$votes} decisões registradas. Recarregar as perguntas apagaria todas — use ♻️ Resetar evento se for essa a intenção.",
+        );
+
+        $total = app(LiveConsensusSeeder::class)->syncQuestions($event);
+
+        return $this->respond($event->refresh())->withHeaders(['X-Questions' => $total]);
+    }
+
+    /**
      * Troca a seleção: quais cenários e quais desempates o evento joga.
      *
      * Renumera na saída, para as rodadas ativas voltarem contíguas — é por

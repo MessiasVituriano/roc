@@ -35,6 +35,8 @@ Route::prefix('admin')->middleware('master')->group(function () {
     // o acervo e a seleção: o evento tem mais perguntas cadastradas do que joga
     Route::get('/question-catalog', [AdminController::class, 'questionCatalog']);
     Route::post('/question-catalog', [AdminController::class, 'selectQuestions']);
+    // recarrega o conteúdo do seeder sem apagar quem já está na sala
+    Route::post('/reload-questions', [AdminController::class, 'reloadQuestions']);
     Route::get('/tables/{table}', [AdminController::class, 'table']);
 
     // fluxo da rodada

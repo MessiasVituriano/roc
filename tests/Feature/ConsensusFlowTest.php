@@ -1072,6 +1072,40 @@ class ConsensusFlowTest extends TestCase
     }
 
     /**
+     * Recarregar o conteúdo não pode custar o evento inteiro.
+     *
+     * Trocar as perguntas por um resete apagaria participantes, mesas e layout
+     * — num dia de evento, 95 pessoas se cadastrando de novo. E não pode
+     * acontecer com voto registrado: apagar uma pergunta apaga os votos dela em
+     * cascata, e um placar meio apagado é pior do que conteúdo velho.
+     */
+    public function test_reloading_the_questions_keeps_the_room_and_refuses_after_votes(): void
+    {
+        $this->postJson('/api/admin/open', [], $this->master);
+        $ana = $this->join('Ana', 1);
+
+        $antes = Question::count();
+
+        $this->postJson('/api/admin/reload-questions', [], $this->master)
+            ->assertOk()
+            ->assertJsonPath('event.round', 1);
+
+        // conteúdo recriado, sala intacta
+        $this->assertSame($antes, Question::count());
+        $this->assertDatabaseHas('participants', ['name' => 'Ana']);
+        $this->assertSame(20, EventTable::count());
+
+        // com voto registrado, recusa
+        $this->postJson('/api/admin/start', [], $this->master);
+        $this->postJson('/api/vote', [
+            'option_id' => $this->optionWorth($this->question(1, 1), 150),
+        ], $this->auth($ana))->assertCreated();
+
+        $this->postJson('/api/admin/reload-questions', [], $this->master)->assertStatus(409);
+        $this->assertDatabaseCount('participant_votes', 1);
+    }
+
+    /**
      * O evento carrega mais perguntas do que joga, e o facilitador escolhe.
      *
      * Dois conjuntos de cenários e dois pares de desempate convivem no banco;

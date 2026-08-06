@@ -139,6 +139,30 @@ function toggle(list, value) {
     else list.value = list.value.filter((v) => v !== value)
 }
 
+// Recarrega o conteúdo do seeder sem apagar quem já está na sala. O servidor
+// recusa com voto registrado; aqui a confirmação existe porque, mesmo sem
+// votos, o facilitador pode ter ajustado a seleção e ela volta ao padrão.
+async function reloadQuestions() {
+    const ok = window.confirm(
+        'Recarregar as perguntas do arquivo de conteúdo?\n\nParticipantes, mesas e layout ficam como estão. '
+        + 'A seleção volta ao padrão e o evento retorna à rodada 1.',
+    )
+
+    if (!ok) return
+
+    busy.value = 'reload'
+    catalogError.value = ''
+
+    try {
+        state.value = await api.post('/admin/reload-questions', {})
+        await openCatalog()
+    } catch (e) {
+        catalogError.value = e.message
+    } finally {
+        busy.value = ''
+    }
+}
+
 async function saveCatalog() {
     busy.value = 'catalog'
     catalogError.value = ''
@@ -1371,6 +1395,15 @@ async function saveLayout() {
                         </button>
                     </div>
                 </div>
+
+                <button
+                    class="w-full rounded-xl px-4 py-2 text-xs font-semibold text-slate-400 hover:text-amber-300 transition disabled:opacity-40 shrink-0"
+                    :disabled="busy === 'reload'"
+                    title="Recria as perguntas a partir do arquivo de conteúdo. Participantes e mesas ficam."
+                    @click="reloadQuestions"
+                >
+                    ↻ {{ busy === 'reload' ? 'Recarregando…' : 'Recarregar perguntas do arquivo de conteúdo' }}
+                </button>
 
                 <div class="grid grid-cols-2 gap-2 shrink-0">
                     <button

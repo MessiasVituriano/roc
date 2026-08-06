@@ -97,6 +97,23 @@ class LiveConsensusSeeder extends Seeder
             ]);
         }
 
+        $this->syncQuestions($event);
+    }
+
+    /**
+     * (Re)cria as perguntas do evento a partir deste arquivo.
+     *
+     * É o caminho para carregar conteúdo novo sem resetar o evento inteiro: as
+     * pessoas, as mesas e o layout ficam onde estão. Só é seguro enquanto
+     * ninguém votou — apagar uma pergunta apaga os votos dela em cascata —, e
+     * quem garante isso é quem chama.
+     *
+     * @return int quantas perguntas ficaram cadastradas
+     */
+    public function syncQuestions(Event $event): int
+    {
+        $event->questions()->delete();
+
         foreach ($this->rounds() as $round) {
             $question = $event->questions()->create([
                 'phase' => $round['phase'],
@@ -130,10 +147,15 @@ class LiveConsensusSeeder extends Seeder
         // facilitador troca a seleção pelo painel
         app(EventFlowService::class)->renumberRounds($event);
 
+        // a rodada corrente volta para a primeira ativa: a que estava apontada
+        // pode nem existir mais depois de recarregar o conteúdo
         $event->update([
+            'current_round' => 1,
             'current_question_id' => $event->questions()
                 ->where('phase', 1)->where('active', true)->orderBy('round')->value('id'),
         ]);
+
+        return $event->questions()->count();
     }
 
     /** Verde para a melhor decisão, vermelho para a que destrói valor. */
@@ -222,14 +244,14 @@ class LiveConsensusSeeder extends Seeder
                 'key' => 'sp2026-rms',
                 'source' => 'roc-sp-2026',
                 'label' => 'A IA SUGERIU, VOCÊ DECIDE',
-                'title' => 'O que você faz com a sugestão do RMS?',
-                'context' => 'Seu RMS (Revenue Management System) sugere aumento de 18% na tarifa para o próximo fim de semana baseado em alta demanda detectada. Seu hotel está com 78% de ocupação confirmada. Porém, você sabe que há um grande evento corporativo na cidade e 60% do seu pickup atual é desse perfil. O evento foi cancelado há 2 horas. O RMS ainda não processou os cancelamentos que virão.',
-                'bias' => 'A diferença entre +150 e +80 está no timing: os dois ignoram o RMS, mas um confirma o estrago antes de queimar tarifa.',
+                'title' => 'O que você faz?',
+                'context' => 'Seu RMS sugere +18% na tarifa para o próximo fim de semana. Hotel com 78% de ocupação. Porém, um evento corporativo que representa 60% do pickup foi cancelado há 2 horas. O sistema ainda não processou os cancelamentos.',
+                'bias' => 'Os dois melhores ignoram o RMS: o que separa +150 de +80 é confirmar o estrago antes de queimar tarifa.',
                 'options' => [
-                    ['Ignoro o aumento, mantenho a tarifa atual e monitoro o pickup nas próximas horas. Se os cancelamentos se confirmarem, entro com promoção de last minute em 1 ou 2 canais de retorno imediato para recompor.', 'Corrige a máquina com inteligência humana, não entra em pânico, e tem plano B cirúrgico pronto para agir rápido.', 150],
-                    ['Sigo a sugestão do RMS. O sistema tem mais dados do que eu e historicamente acerta na maioria das vezes.', 'Confia na máquina sem considerar informação que ela ainda não tem. Vai subir preço na véspera de cancelamentos.', 0],
-                    ['Aplico o aumento de 18% agora e, quando os cancelamentos vierem, reduzo agressivamente para preencher.', 'Sobe e desce tarifa em 48h. Confunde o mercado, perde credibilidade de preço e sai perdendo nos dois movimentos.', -50],
-                    ['Ignoro o aumento e já abro imediatamente promoções em todos os canais para antecipar a queda de ocupação que virá.', 'Reage rápido, mas abre promoção antes de confirmar o tamanho do estrago. Pode estar queimando tarifa sem necessidade.', 80],
+                    ['Ignoro o aumento, mantenho tarifa e monitoro. Se cancelamentos vierem, entro com promo last minute em 1-2 canais de retorno rápido.', 'Corrige a máquina com inteligência humana, não entra em pânico, e tem plano B cirúrgico pronto.', 150],
+                    ['Sigo o RMS. O sistema tem mais dados que eu e geralmente acerta.', 'Confia na máquina sem considerar informação que ela ainda não tem.', 0],
+                    ['Aplico o aumento agora e, se cancelarem, reduzo depois para preencher.', 'Sobe e desce tarifa em 48h. Confunde o mercado e perde nos dois movimentos.', -50],
+                    ['Ignoro o aumento e já abro promoções em todos os canais para antecipar a queda.', 'Reage rápido, mas abre promo antes de confirmar o tamanho do estrago. Pode queimar tarifa sem necessidade.', 80],
                 ],
             ],
             [
@@ -237,55 +259,55 @@ class LiveConsensusSeeder extends Seeder
                 'source' => 'roc-sp-2026',
                 'label' => 'O CONCORRENTE DESESPERADO',
                 'title' => 'O que você faz?',
-                'context' => 'Seu hotel 5 estrelas opera com 72% de ocupação e diária média de R$ 890. O principal concorrente direto acaba de derrubar a tarifa em 35% numa flash sale agressiva para o próximo feriado prolongado. Sua equipe comercial está pressionando para reagir. O feriado é daqui a 18 dias. Seu pickup está estável.',
+                'context' => 'Hotel 5 estrelas, 72% de ocupação, diária média R$ 890. Concorrente direto derrubou tarifa em 35% para o feriado (daqui a 18 dias). Comercial pressiona para reagir. Pickup estável.',
                 'bias' => 'Os 18 dias são a régua: o que separa +150 de +80 é o que dá para maturar nesse prazo.',
                 'options' => [
-                    ['Mantenho a tarifa e monitoro o pickup por 7 dias. Se não evoluir, crio um pacote sem reduzir a BAR (Best Available Rate).', 'Perde 7 dos 18 dias sem agir. Quando decidir, a janela já encolheu e o concorrente já captou a demanda.', 0],
-                    ['Reduzo a tarifa em 30% para ficar competitivo. Não posso perder esse feriado.', 'Entra na espiral de commoditização, destrói diária média e posicionamento de marca por um único feriado.', -50],
-                    ['Mantenho a tarifa, trabalho upsell com a base de clientes, ofereço MAP (Meia Pensão) e serviços adicionais, e fecho canais de menor rentabilidade para manter pickup estável e rentabilizar a diária média.', 'Ação imediata, viável em 18 dias: rentabiliza sem reduzir preço, usa canais e base própria, protege posicionamento.', 150],
-                    ['Mantenho a tarifa e aciono o marketing para reforçar diferenciais de experiência com campanhas de valor agregado para converter indecisos.', 'Direção correta, mas campanhas de marketing precisam de tempo para maturar — 18 dias é curto para essa estratégia gerar resultado.', 80],
+                    ['Mantenho tarifa e monitoro pickup por 7 dias. Se não evoluir, crio pacote.', 'Perde 7 dos 18 dias sem agir. Quando decidir, a janela já encolheu.', 0],
+                    ['Reduzo 30% para ficar competitivo. Não posso perder o feriado.', 'Entra na espiral de commoditização, destrói diária média e posicionamento.', -50],
+                    ['Mantenho tarifa, trabalho upsell com base de clientes, ofereço MAP, fecho canais de menor rentabilidade.', 'Ação imediata, viável em 18 dias: rentabiliza sem reduzir preço, usa base própria.', 150],
+                    ['Mantenho tarifa e aciono marketing para campanhas de valor agregado.', 'Direção correta, mas campanhas de marketing precisam de tempo — 18 dias é curto para maturar.', 80],
                 ],
             ],
             [
                 'key' => 'sp2026-contrato',
                 'source' => 'roc-sp-2026',
-                'label' => 'O CONTRATO CORPORATIVO QUE VENCEU',
-                'title' => 'Como você conduz a renovação?',
-                'context' => 'O maior contrato corporativo do seu hotel (18% da ocupação total, 420 room nights/mês) está em renovação. A empresa pede redução de 12% na tarifa negociada alegando que "o mercado está mais competitivo". Sua análise mostra que o volume real caiu 30% nos últimos 6 meses (de 420 para 290 RN/mês). A tarifa atual já está 25% abaixo da BAR (Best Available Rate). O comercial quer renovar "para não perder o cliente".',
+                'label' => 'O CONTRATO QUE VENCEU',
+                'title' => 'Como conduz a renovação?',
+                'context' => 'Maior contrato corporativo (420 RN/mês) em renovação. Empresa pede -12% na tarifa. Seu dado: volume real caiu para 290 RN/mês nos últimos 6 meses. Tarifa atual já está 25% abaixo da BAR. Comercial quer renovar "para não perder".',
                 'bias' => 'O dado do volume real é a chave: quem não o usa cede preço sobre quartos que o cliente já não compra.',
                 'options' => [
-                    ['Aceito redução de 5% (meio-termo) mantendo o volume contratado de 420 RN com cláusula de penalidade se não atingir 80% do compromisso.', 'Parece equilibrado, mas cede preço sobre um volume que o cliente já não entrega. Na prática, vai pagar menos por menos quartos.', 80],
-                    ['Renovo com a tarifa atual (sem redução), mas ajusto o volume contratado para o real (290 RN). Proponho cláusula de performance: se voltarem a 420 RN, ganham 5% de desconto progressivo. Incluo benefícios de valor (upgrade sob disponibilidade, late checkout).', 'Usa dados reais para negociar, não cede preço, mas oferece caminho para o cliente ganhar se entregar volume. Realista e justo.', 150],
-                    ['Aceito os 12% de redução para garantir a renovação. Perder 18% da ocupação seria catastrófico.', 'Cede preço sobre volume que já caiu. Na prática vai receber menos dinheiro por menos quartos. Dupla perda.', -50],
-                    ['Peço 15 dias para analisar o histórico completo e apresentar uma contraproposta embasada.', 'O cliente tem outras propostas na mesa. 15 dias é tempo demais — pode fechar com concorrente.', 0],
+                    ['Aceito -5% mantendo 420 RN contratadas com penalidade se não atingir 80%.', 'Parece equilibrado, mas cede preço sobre volume que o cliente já não entrega.', 80],
+                    ['Renovo sem redução, ajusto volume para o real (290 RN). Cláusula: se voltarem a 420, ganham 5% progressivo.', 'Usa dados reais, não cede preço, mas oferece caminho para o cliente ganhar se entregar volume.', 150],
+                    ['Aceito os -12%. Perder 18% da ocupação seria catastrófico.', 'Cede preço sobre volume que já caiu. Vai receber menos por menos quartos. Dupla perda.', -50],
+                    ['Peço 15 dias para analisar histórico e montar contraproposta.', 'O cliente tem outras propostas. 15 dias é tempo demais — pode fechar com concorrente.', 0],
                 ],
             ],
             [
                 'key' => 'sp2026-upsell',
                 'source' => 'roc-sp-2026',
                 'label' => 'O DILEMA DO UPSELL',
-                'title' => 'Como você resolve?',
-                'context' => 'Seu hotel urbano de 200 UHs (Unidades Habitacionais) está com 94% de ocupação para amanhã. Restam 12 apartamentos: 4 standards e 8 suítes. Um cliente fidelizado (15 estadias/ano, diária média histórica de R$ 650) liga pedindo uma standard por R$ 580 (tarifa corporativa negociada). Simultaneamente, há demanda orgânica para suítes a R$ 1.200 no site.',
+                'title' => 'Como resolve?',
+                'context' => 'Hotel 200 UHs, 94% de ocupação amanhã. Restam 4 standards e 8 suítes. Cliente fidelizado (15 estadias/ano) pede standard a R$ 580 (tarifa acordo). Há demanda orgânica para suítes a R$ 1.200 no site.',
                 'bias' => 'Todas honram ou quebram a tarifa acordo de algum jeito: repare em quem honra **e** rentabiliza.',
                 'options' => [
-                    ['Faço upgrade cortesia para suíte para fidelizar, liberando a standard para venda a preço cheio.', 'Entrega suíte grátis quando há demanda a R$ 1.200. Perde mais de R$ 500 de receita potencial por UH. Generosidade que custa caro.', -50],
-                    ['Confirmo a standard a R$ 580 sem oferta adicional. Mantenho as 8 suítes a R$ 1.200 para demanda orgânica.', 'Cumpre o contrato e protege suítes, mas deixa dinheiro na mesa — o cliente poderia aceitar o upsell e todos ganhariam.', 80],
-                    ['Confirmo a standard a R$ 580 e ofereço upsell para suíte com 20% sobre a tarifa acordo (R$ 696), posicionando como condição exclusiva de fidelidade. Suítes restantes seguem a R$ 1.200 no site.', 'Honra o acordo, rentabiliza com upsell inteligente, faz o cliente se sentir valorizado e preserva yield das suítes para demanda aberta.', 150],
-                    ['Ofereço a suíte diretamente por R$ 950 como "upgrade com desconto especial" sem confirmar a standard primeiro.', 'Parece generoso, mas não honra a tarifa acordo. O cliente percebe que estão tentando vender mais caro do que o combinado.', 0],
+                    ['Faço upgrade cortesia para suíte, liberando standard para venda a preço cheio.', 'Entrega suíte grátis com demanda a R$ 1.200. Perde +R$ 500 de receita potencial por UH.', -50],
+                    ['Confirmo standard a R$ 580 sem oferta adicional. Suítes ficam a R$ 1.200.', 'Cumpre o contrato, mas deixa dinheiro na mesa — o cliente poderia aceitar o upsell.', 80],
+                    ['Confirmo standard a R$ 580 e ofereço upsell para suíte a R$ 696 (20% sobre o acordo).', 'Honra o acordo, rentabiliza com upsell inteligente e preserva yield das suítes para demanda aberta.', 150],
+                    ['Ofereço suíte por R$ 950 como "condição especial" sem confirmar a standard.', 'Não honra a tarifa acordo. O cliente percebe que estão tentando vender mais caro.', 0],
                 ],
             ],
             [
-                'key' => 'sp2026-budget',
+                'key' => 'sp2026-ocupacao',
                 'source' => 'roc-sp-2026',
-                'label' => 'O MOMENTO DA VERDADE',
-                'title' => 'Qual é a sua resposta?',
-                'context' => 'Reunião de budget do próximo ano. O CFO (Diretor Financeiro) quer +15% no RevPAR (Receita por Apartamento Disponível). O VP Comercial quer +20% em volume de grupos. O VP de Operações pede contenção de custos de 8%. O CEO pergunta diretamente para você: "Como o Revenue Management vai entregar resultado com essas três demandas simultâneas?" Todos olham para você.',
-                'bias' => 'A rodada fecha a tese: o que separa +150 de +80 é conectar as três metas numa lógica só, em vez de responder uma a uma.',
+                'label' => 'A OCUPAÇÃO ESTAGNOU',
+                'title' => 'O que você faz para destravar?',
+                'context' => 'Seu hotel tem diária média 35% acima do mercado e RevPAR 10% superior. Mas a ocupação trava em 67% há 4 meses (mercado opera a 78%). Sua análise: o pickup para 15 dias antes da data — os últimos 11% vão para concorrentes mais baratos. GG cobra crescimento.',
+                'bias' => 'Defender a posição atual com dados corretos não é o mesmo que propor como crescer — o GG quer ação.',
                 'options' => [
-                    ['Preciso de uma semana para simular cenários e voltar com uma proposta detalhada que contemple as três metas.', 'Na frente do CEO, com todos olhando, pedir tempo é perder o momento.', 0],
-                    ['RevPAR cresce via mix — mais receita por hóspede com upsell, A&B (Alimentos e Bebidas) e serviços, não só mais quartos. Grupos entram com piso tarifário e consumo mínimo de A&B para não canibalizar. Eficiência vem do forecast: quanto melhor a previsão, menos desperdício operacional. Mas preciso que cada área se comprometa com a sua parte.', 'Conecta as três metas numa lógica única, mostra como cada área contribui e posiciona RM como orquestrador.', 150],
-                    ['Posso entregar 15% de RevPAR com equilíbrio entre tarifa e ocupação. Para grupos, preciso de piso tarifário definido. Para custos, melhoro a acurácia do forecast para a operação dimensionar melhor.', 'Tecnicamente correto, mas responde cada meta isoladamente. Não mostra como as três se conectam.', 80],
-                    ['Posso entregar os 15% de RevPAR, mas preciso que o comercial pare de aceitar grupos abaixo da BAR e que a operação não corte minha equipe de RM.', 'Joga responsabilidade nos outros, cria conflito na reunião e reforça silos.', -50],
+                    ['Faço estudo de elasticidade por segmento para entender onde posso flexibilizar tarifa sem impactar a diária média geral. Prazo de entrega: 30 dias.', 'Estudo válido, mas 30 dias para entregar quando o GG cobra agora. Perde relevância.', 0],
+                    ['Junto com distribuição e marketing, crio oferta de last minute (7 dias antes) em 1-2 canais específicos, com tarifa acima do set mas com valor agregado incluso. Testo por 60 dias e meço impacto na diária média.', 'Ação cirúrgica no ponto exato onde perde demanda, sem contaminar a estratégia geral. Testa, mede e ajusta.', 150],
+                    ['Apresento ao GG o comparativo mostrando que nosso RevPAR é 10% superior mesmo com menos ocupação, e proponho trocar a meta de ocupação por rentabilidade por UH.', 'Dados corretos, mas só defende a posição atual — não propõe como crescer. O GG quer ação.', 80],
+                    ['Reduzo tarifa em 15% nos últimos 15 dias antes da data para capturar a demanda que está indo para os concorrentes mais baratos.', 'Redução linear destrói diária média sem segmentação. Canibalização.', -50],
                 ],
             ],
         ];
@@ -417,13 +439,13 @@ class LiveConsensusSeeder extends Seeder
                 'is_bonus' => true,
                 'source' => 'roc-sp-2026',
                 'label' => 'DESEMPATE D1',
-                'title' => 'A Ocupação Estagnou',
-                'context' => 'Seu hotel tem diária média 35% acima do set competitivo e RevPAR (Receita por Apartamento Disponível) 10% superior. Porém, a ocupação está estagnada em 67% há 4 meses enquanto o mercado opera a 78%. O GG (Gerente Geral) cobra crescimento. Sua análise mostra que o pickup para de evoluir consistentemente 15 dias antes da data — os últimos 11% de ocupação vão para concorrentes mais baratos.',
+                'title' => 'O Momento da Verdade',
+                'context' => 'Reunião de budget. CFO quer +15% no RevPAR. VP Comercial quer +20% em grupos. VP Operações pede -8% em custos. CEO pergunta: "Como RM entrega as três?"',
                 'options' => [
-                    ['Apresento os dados ao GG mostrando que nosso RevPAR é superior e proponho meta de rentabilidade por UH ao invés de ocupação pura.', 'Dados corretos, mas só defende a posição atual — não propõe como crescer. O GG quer ação, não justificativa.', 80],
-                    ['Reduzo a tarifa em 15% nos últimos 15 dias antes da data para capturar a demanda que está indo para concorrentes.', 'Redução linear destrói a diária média sem segmentação. Hóspedes que já reservaram verão a queda. Canibalização.', -50],
-                    ['Trabalho com distribuição e marketing para criar uma oferta de last minute (7 dias antes) em 1 ou 2 canais específicos, com tarifa ainda acima do set mas com valor agregado (late checkout, A&B incluso). Testo por 60 dias e meço o impacto na diária média total.', 'Ação cirúrgica no ponto exato onde perde demanda, sem contaminar a estratégia geral. Testa, mede e ajusta.', 150],
-                    ['Analiso a elasticidade por segmento para entender onde posso flexibilizar tarifa sem impactar a diária média geral. Apresento estudo em 30 dias.', 'Estudo válido, mas 30 dias para entregar análise quando o GG cobra agora. Perde relevância e protagonismo.', 0],
+                    ['Preciso de uma semana para simular cenários e trazer proposta detalhada.', 'Na frente do CEO, pedir tempo é perder o momento.', 0],
+                    ['Entrego 15% de RevPAR com mix tarifa/ocupação. Grupos com piso. Custos via forecast.', 'Tecnicamente correto, mas responde cada meta isoladamente. Não conecta.', 80],
+                    ['Entrego se o comercial não aceitar grupos abaixo da BAR e se não cortarem minha equipe.', 'Joga responsabilidade nos outros e reforça silos.', -50],
+                    ['RevPAR via mix de receita por hóspede. Grupos com piso e consumo mínimo de A&B. Eficiência via forecast. Preciso das áreas alinhadas.', 'Conecta as três metas numa lógica única e posiciona RM como orquestrador.', 150],
                 ],
             ],
             [
@@ -432,13 +454,13 @@ class LiveConsensusSeeder extends Seeder
                 'is_bonus' => true,
                 'source' => 'roc-sp-2026',
                 'label' => 'DESEMPATE D2',
-                'title' => 'O Grupo que Preenche, Mas...',
-                'context' => 'Uma operadora oferece um contrato de 40 UHs (Unidades Habitacionais) por noite (de 180 disponíveis) durante a baixa temporada, por 6 meses, a uma tarifa 45% abaixo da sua BAR (Best Available Rate). Isso garantiria 22% de ocupação base. Historicamente, sua ocupação na baixa é de 55%. A operadora exige tarifa 10% abaixo da paridade e quebra do mínimo de noites nos feriados prolongados.',
+                'title' => 'O Grupo que Preenche',
+                'context' => 'Operadora oferece 40 UHs/noite na baixa (de 180 disponíveis), 6 meses, tarifa 45% abaixo da BAR. Sua ocupação histórica na baixa: 55%. Exigências: 10% abaixo da paridade + quebra de mínimo de noites nos feriados.',
                 'options' => [
-                    ['Aceito integralmente. 22% de base garantida na baixa é um colchão que reduz minha ansiedade de pickup.', 'Entrega 45% de desconto + quebra de paridade + feriados. Vende o hotel barato e perde controle.', -50],
-                    ['Aceito as 40 UHs, mas renegocio: sem quebra de mínimo nos feriados, aceito os 10% abaixo da paridade, com tarifa a 35% abaixo da BAR. Contrapartida: release de 21 dias e cláusula de revisão trimestral.', 'Negociação realista: cede onde pode (paridade), protege onde dói (feriados), melhora tarifa e garante flexibilidade.', 150],
-                    ['Peço 5 dias para rodar os números e simular o impacto no RevPAR antes de responder.', 'Parece prudente, mas a operadora tem prazo. Enquanto analisa, ela fecha com o concorrente.', 0],
-                    ['Aceito um volume menor (25 UHs), sem quebra de mínimo nos feriados, com paridade mantida, e ofereço benefícios operacionais ao invés de desconto adicional.', 'Ideal na teoria, mas na prática a operadora não aceita redução de 40 para 25 UHs sem contrapartida. Negociação travaria.', 80],
+                    ['Aceito integralmente. 22% de base na baixa é essencial.', 'Entrega tudo: desconto + paridade + feriados. Vende barato e perde controle.', -50],
+                    ['Aceito 40 UHs, sem quebra nos feriados, aceito 10% abaixo da paridade, tarifa a 35% abaixo da BAR. Release de 21 dias + revisão trimestral.', 'Cede onde pode (paridade), protege onde dói (feriados), melhora tarifa e garante flexibilidade.', 150],
+                    ['Peço 5 dias para rodar números e simular impacto.', 'A operadora tem prazo. Enquanto analisa, fecha com concorrente.', 0],
+                    ['Aceito volume menor (25 UHs), sem quebra, paridade mantida, ofereço benefícios operacionais.', 'Ideal na teoria, mas a operadora não aceita redução de 40 para 25 sem contrapartida. Travaria.', 80],
                 ],
             ],
 
