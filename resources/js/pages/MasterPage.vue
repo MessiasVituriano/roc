@@ -133,10 +133,22 @@ async function openCatalog() {
     }
 }
 
-function toggle(list, value) {
-    const i = list.value.indexOf(value)
-    if (i < 0) list.value = [...list.value, value]
-    else list.value = list.value.filter((v) => v !== value)
+// Um alternador por lista, e não um genérico recebendo o ref.
+//
+// No `<script setup>` o template **desembrulha** os refs: `toggle(pickedScenarios, …)`
+// chegava aqui com o array, não com o ref, e `list.value` era `undefined` — o
+// clique estourava antes de marcar nada. Fechar cada função sobre o próprio ref
+// tira o desembrulho do caminho.
+const toggleScenario = (key) => {
+    pickedScenarios.value = pickedScenarios.value.includes(key)
+        ? pickedScenarios.value.filter((k) => k !== key)
+        : [...pickedScenarios.value, key]
+}
+
+const toggleTieBreak = (id) => {
+    pickedTieBreaks.value = pickedTieBreaks.value.includes(id)
+        ? pickedTieBreaks.value.filter((v) => v !== id)
+        : [...pickedTieBreaks.value, id]
 }
 
 // Recarrega o conteúdo do seeder sem apagar quem já está na sala. O servidor
@@ -1354,7 +1366,7 @@ async function saveLayout() {
                             :class="pickedScenarios.includes(row.scenario_key)
                                 ? 'bg-emerald-500/10 ring-emerald-400/40'
                                 : 'bg-slate-800/40 ring-white/5 hover:ring-white/20'"
-                            @click="toggle(pickedScenarios, row.scenario_key)"
+                            @click="toggleScenario(row.scenario_key)"
                         >
                             <span class="text-lg leading-none mt-0.5">
                                 {{ pickedScenarios.includes(row.scenario_key) ? '☑' : '☐' }}
@@ -1380,7 +1392,7 @@ async function saveLayout() {
                             :class="pickedTieBreaks.includes(row.id)
                                 ? 'bg-rose-500/10 ring-rose-400/40'
                                 : 'bg-slate-800/40 ring-white/5 hover:ring-white/20'"
-                            @click="toggle(pickedTieBreaks, row.id)"
+                            @click="toggleTieBreak(row.id)"
                         >
                             <span class="text-lg leading-none mt-0.5">
                                 {{ pickedTieBreaks.includes(row.id) ? '☑' : '☐' }}
